@@ -18,9 +18,6 @@ package org.apache.rocketmq.store;
 
 import com.sun.jna.NativeLong;
 import com.sun.jna.Pointer;
-import java.nio.ByteBuffer;
-import java.util.Deque;
-import java.util.concurrent.ConcurrentLinkedDeque;
 import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.logging.InternalLoggerFactory;
@@ -28,10 +25,15 @@ import org.apache.rocketmq.store.config.MessageStoreConfig;
 import org.apache.rocketmq.store.util.LibC;
 import sun.nio.ch.DirectBuffer;
 
+import java.nio.ByteBuffer;
+import java.util.Deque;
+import java.util.concurrent.ConcurrentLinkedDeque;
+
 public class TransientStorePool {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
-
+    /**缓存对外内存的个数*/
     private final int poolSize;
+    /**buffer大小1G*/
     private final int fileSize;
     private final Deque<ByteBuffer> availableBuffers;
     private final MessageStoreConfig storeConfig;
@@ -39,12 +41,14 @@ public class TransientStorePool {
     public TransientStorePool(final MessageStoreConfig storeConfig) {
         this.storeConfig = storeConfig;
         this.poolSize = storeConfig.getTransientStorePoolSize();
+        //1G
         this.fileSize = storeConfig.getMappedFileSizeCommitLog();
         this.availableBuffers = new ConcurrentLinkedDeque<>();
     }
 
     /**
      * It's a heavy init method.
+     * 会占用5个G的直接内存生成ByteBuffer 用于写缓冲
      */
     public void init() {
         for (int i = 0; i < poolSize; i++) {

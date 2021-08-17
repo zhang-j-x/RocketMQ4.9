@@ -16,11 +16,12 @@
  */
 package org.apache.rocketmq.common;
 
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.logging.InternalLoggerFactory;
+
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public abstract class ServiceThread implements Runnable {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.COMMON_LOGGER_NAME);
@@ -121,21 +122,28 @@ public abstract class ServiceThread implements Runnable {
     }
 
     public void wakeup() {
+        //改变hasNotified为true
         if (hasNotified.compareAndSet(false, true)) {
             waitPoint.countDown(); // notify
         }
     }
 
     protected void waitForRunning(long interval) {
+        /**
+         * 这个位置非常巧妙 如果hasNotified为true，则证明有新的消息写入，新的消息的偏移量肯定比目前要刷盘的所有消息的偏移量都要大
+         * 那么交换下读写队列 刷盘那条最大的偏移量的消息 就刷盘了所有消息，刷盘次数最少，当前的读队列交换到写队列，下次刷盘时判断
+         * 发现偏移量小于当前刷盘的偏移量就不用刷盘 此处做到刷盘利益最大化
+         */
         if (hasNotified.compareAndSet(true, false)) {
             this.onWaitEnd();
             return;
         }
 
-        //entry to wait
+        //重置CountDownLatch2 CountDownLatch2是RocketMQ自己实现的带有重置功能的CountDownLatch
         waitPoint.reset();
 
         try {
+            //等待10ms  情况1： 10ms等待超时 执行下一步 情况2：等待过程中被唤醒
             waitPoint.await(interval, TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             log.error("Interrupted", e);

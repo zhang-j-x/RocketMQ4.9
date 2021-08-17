@@ -66,7 +66,7 @@ public class MappedFile extends ReferenceResource {
      * transientStorePoolEnable为true时，writeBuffer不为空
      */
     protected ByteBuffer writeBuffer = null;
-    /**堆外内存池，该内存池的内存会提供内存锁定机制 transientStorePoolEnable为true时启用*/
+    /**堆外内存池，该内存池的内存会提供内存锁定机制 transientStorePoolEnable为true时启用 */
     protected TransientStorePool transientStorePool = null;
     /**文件名称*/
     private String fileName;
@@ -299,8 +299,11 @@ public class MappedFile extends ReferenceResource {
         return false;
     }
 
-    /**刷盘
-     *
+    /**
+     *刷盘 两种情况： 1、transientStorePoolEnable为true，启用了内存缓冲池，writeBuffer不为空
+     *                  此时所有的数据都是先提交到writeBuffer，然后由writeBuffer提交到MappedFile的fileChannel中，此时刷盘使用fileChannel.force(false);
+     *              2、transientStorePoolEnable为false，未启用内存缓冲池，writeBuffer为空
+     *                  此时所有的数据都是直接提交到mappedByteBuffer中的，所以直接使用this.mappedByteBuffer.force();
      * @param flushLeastPages 刷盘的最小页数 flushLeastPages = 0 时强制刷盘 flushLeastPages > 0时需要脏页数量达到flushLeastPages才刷盘
      * @return
      */
@@ -331,12 +334,19 @@ public class MappedFile extends ReferenceResource {
         return this.getFlushedPosition();
     }
 
+    /**
+     * 使用此方法是 ransientStorePoolEnable为true时，启用了内存缓冲池，writeBuffer不为空
+     * 此时所有的数据都是先提交到writeBuffer，然后由writeBuffer提交到MappedFile的fileChannel中，此方法只是提交并没有刷磁盘
+     * 如果要持久化到磁盘还要使用flush方法
+     * @param commitLeastPages
+     * @return
+     */
     public int commit(final int commitLeastPages) {
         if (writeBuffer == null) {
             //没有内容提交 返回写指针
             return this.wrotePosition.get();
         }
-        //判断有没有脏页
+        //判断writeBuffer有没有脏页
         if (this.isAbleToCommit(commitLeastPages)) {
             if (this.hold()) {
                 commit0(commitLeastPages);
@@ -356,6 +366,10 @@ public class MappedFile extends ReferenceResource {
         return this.committedPosition.get();
     }
 
+    /**
+     * 将暂存池writeBuffer的数据提交到fileChannel 但是并没有强制刷新到磁盘
+     * @param commitLeastPages
+     */
     protected void commit0(final int commitLeastPages) {
         int writePos = this.wrotePosition.get();
         int lastCommittedPosition = this.committedPosition.get();
