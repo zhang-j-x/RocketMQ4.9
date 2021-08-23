@@ -122,17 +122,27 @@ public abstract class ServiceThread implements Runnable {
     }
 
     public void wakeup() {
-        //改变hasNotified为true
+        /**
+         *-----------GroupCommitService CommitLog同步刷盘----------
+         * 改变hasNotified为true 表明有新的刷盘请求
+         *同步刷盘线程在休眠 将其唤醒
+         */
+
         if (hasNotified.compareAndSet(false, true)) {
-            waitPoint.countDown(); // notify
+            waitPoint.countDown();
         }
     }
 
     protected void waitForRunning(long interval) {
         /**
-         * 这个位置非常巧妙 如果hasNotified为true，则证明有新的消息写入，新的消息的偏移量肯定比目前要刷盘的所有消息的偏移量都要大
-         * 那么交换下读写队列 刷盘那条最大的偏移量的消息 就刷盘了所有消息，刷盘次数最少，当前的读队列交换到写队列，下次刷盘时判断
-         * 发现偏移量小于当前刷盘的偏移量就不用刷盘 此处做到刷盘利益最大化
+         *-----------GroupCommitService CommitLog同步刷盘----------
+         * 此处代码hasNotified==true有两种情况，
+         *  1、上次请求刷盘后，有新请求到来，此时 读队列已经被清空，写队列有新数据
+         *  2、上次hasNotified==true 读写队列交换后，for循环，在交换后又有新请求到来，此时hasNotified又为true再交换读写队列
+         *          新的消息的偏移量肯定比目前要刷盘的所有消息的偏移量都要大，那么交换下读写队列 刷盘那条最大的偏移量的消息 就刷盘了所有消息，
+         *          刷盘次数最少，下次运行是当前的读队列交换到写队列，下次刷盘时判断发现偏移量小于当前刷盘的偏移量就不用刷盘 此处做到刷盘利益最大化
+         *
+         *
          */
         if (hasNotified.compareAndSet(true, false)) {
             this.onWaitEnd();
@@ -143,12 +153,16 @@ public abstract class ServiceThread implements Runnable {
         waitPoint.reset();
 
         try {
-            //等待10ms  情况1： 10ms等待超时 执行下一步 情况2：等待过程中被唤醒
+            //等待固定时间  情况1： 等待超时 执行下一步 情况2：等待过程中被唤醒
             waitPoint.await(interval, TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             log.error("Interrupted", e);
         } finally {
             hasNotified.set(false);
+            /**
+             * -----------GroupCommitService----------
+             * 此处再次交换读写队列@TODO 此处存疑 不知道问什么要再次交换读写队列
+             */
             this.onWaitEnd();
         }
     }

@@ -31,7 +31,7 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 
 public class TransientStorePool {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
-    /**缓存对外内存的个数*/
+    /**缓存对外内存的个数 5*/
     private final int poolSize;
     /**buffer大小1G*/
     private final int fileSize;
@@ -40,6 +40,7 @@ public class TransientStorePool {
 
     public TransientStorePool(final MessageStoreConfig storeConfig) {
         this.storeConfig = storeConfig;
+        //5
         this.poolSize = storeConfig.getTransientStorePoolSize();
         //1G
         this.fileSize = storeConfig.getMappedFileSizeCommitLog();

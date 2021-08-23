@@ -135,6 +135,10 @@ public class MappedFileQueue {
         this.deleteExpiredFile(willRemoveFiles);
     }
 
+    /**
+     * 删除过期的文件
+     * @param files
+     */
     void deleteExpiredFile(List<MappedFile> files) {
 
         if (!files.isEmpty()) {
@@ -380,7 +384,7 @@ public class MappedFileQueue {
      * 删除commitlog过期文件 由定时任务调用
      * @param expiredTime  过期时间
      * @param deleteFilesInterval 删除两个文件的时间间隔
-     * @param intervalForcibly MappedFile#destory 传递的参数
+     * @param intervalForcibly 第一次尝试删除拒绝后文件能保留的最大时间
      * @param cleanImmediately true 强制删除 不考虑过期时间
      * @return
      */
@@ -432,7 +436,7 @@ public class MappedFileQueue {
                 }
             }
         }
-
+        //从MappedFileQueue中删除
         deleteExpiredFile(files);
 
         return deleteCount;
@@ -516,10 +520,18 @@ public class MappedFileQueue {
         return result;
     }
 
+    /**
+     * 提交消息
+     * 异步刷盘 并且启用TransientStorePool时  将堆外内存缓冲buffer的消息提交到MappedFile的fileChannel中
+     * @param commitLeastPages
+     * @return
+     */
     public boolean commit(final int commitLeastPages) {
         boolean result = true;
+        //找到提交指针所在MappedFile
         MappedFile mappedFile = this.findMappedFileByOffset(this.committedWhere, this.committedWhere == 0);
         if (mappedFile != null) {
+            //调用MappedFile的commit方法提交消息
             int offset = mappedFile.commit(commitLeastPages);
             long where = mappedFile.getFileFromOffset() + offset;
             result = where == this.committedWhere;
@@ -624,16 +636,25 @@ public class MappedFileQueue {
         return size;
     }
 
+    /**
+     * 重试删除 删除应该删除但是未删除成功的文件
+     * @param intervalForcibly
+     * @return
+     */
     public boolean retryDeleteFirstFile(final long intervalForcibly) {
+        //获取第一个MappedFile
         MappedFile mappedFile = this.getFirstMappedFile();
         if (mappedFile != null) {
             if (!mappedFile.isAvailable()) {
+                //如果mappedFile不可用 则证明删除过 但是任然存在
                 log.warn("the mappedFile was destroyed once, but still alive, " + mappedFile.getFileName());
+                //调用mappedFile#destroy 销毁文件 如果120s后尝试关闭MappedFile 引用计数还是不为0  则每执行一次 引用计数减1000，直到释放资源
                 boolean result = mappedFile.destroy(intervalForcibly);
                 if (result) {
                     log.info("the mappedFile re delete OK, " + mappedFile.getFileName());
                     List<MappedFile> tmpFiles = new ArrayList<MappedFile>();
                     tmpFiles.add(mappedFile);
+                    //从内存中删除
                     this.deleteExpiredFile(tmpFiles);
                 } else {
                     log.warn("the mappedFile re delete failed, " + mappedFile.getFileName());

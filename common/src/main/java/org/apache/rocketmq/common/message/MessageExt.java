@@ -16,33 +16,42 @@
  */
 package org.apache.rocketmq.common.message;
 
+import org.apache.rocketmq.common.TopicFilterType;
+import org.apache.rocketmq.common.sysflag.MessageSysFlag;
+
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
-import org.apache.rocketmq.common.TopicFilterType;
-import org.apache.rocketmq.common.sysflag.MessageSysFlag;
 
 public class MessageExt extends Message {
     private static final long serialVersionUID = 5720810158625748049L;
 
     private String brokerName;
-
+    /**topic下队列id*/
     private int queueId;
-
+    /**消息大小*/
     private int storeSize;
-
+    /**消息在consumequeue的偏移量*/
     private long queueOffset;
+    /**记录一些系统标志的开关状态，MessageSysFlag中定义了系统标识*/
     private int sysFlag;
+    /**消息创建时间*/
     private long bornTimestamp;
+    /**生产者ip + 端口*/
     private SocketAddress bornHost;
-
+    /**消息存储时间*/
     private long storeTimestamp;
+    /**broker ip + 端口*/
     private SocketAddress storeHost;
+    /**消息id = 4字节borker ip + 4字节 borker 端口 + 8字节消息偏移量*/
     private String msgId;
+    /**消息在commitlog的偏移量*/
     private long commitLogOffset;
+    /**消息内容CRC校验值*/
     private int bodyCRC;
+    /**消息重试消费次数*/
     private int reconsumeTimes;
 
     private long preparedTransactionOffset;

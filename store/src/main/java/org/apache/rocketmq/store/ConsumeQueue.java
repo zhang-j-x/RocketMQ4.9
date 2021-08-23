@@ -16,32 +16,48 @@
  */
 package org.apache.rocketmq.store;
 
-import java.io.File;
-import java.nio.ByteBuffer;
-import java.util.List;
 import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.logging.InternalLoggerFactory;
 import org.apache.rocketmq.store.config.BrokerRole;
 import org.apache.rocketmq.store.config.StorePathConfigHelper;
 
+import java.io.File;
+import java.nio.ByteBuffer;
+import java.util.List;
+
 public class ConsumeQueue {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
-
+    /**
+     * CQData数据单元的固定大小 20字节
+     *  其中
+     *      commitlog offset：8字节
+     *      size: 4字节
+     *      tag hashcode：8字节
+     */
     public static final int CQ_STORE_UNIT_SIZE = 20;
     private static final InternalLogger LOG_ERROR = InternalLoggerFactory.getLogger(LoggerName.STORE_ERROR_LOGGER_NAME);
 
+    /***存储主模块*/
     private final DefaultMessageStore defaultMessageStore;
 
     private final MappedFileQueue mappedFileQueue;
+    /***ConsumeQueue对应的主题*/
     private final String topic;
+    /***ConsumeQueue对应的队列*/
     private final int queueId;
+    /**临时缓冲区： 插入新的CQData数据单元使用*/
     private final ByteBuffer byteBufferIndex;
 
+    /**目录位置*/
     private final String storePath;
+    /**每个consumerQueue文件的大小 20B * 30w = 600wB  大约6MB*/
     private final int mappedFileSize;
+    /***当前consumerQueue存储的最大消息物理偏移量（指消息在commitLog的偏移量）*/
     private long maxPhysicOffset = -1;
+    /***当前consumerQueue存储的最小消息物理偏移量（指消息在commitLog的偏移量）*/
     private volatile long minLogicOffset = 0;
+    /**consumeQueue类的拓展，记录一些不重要的信息*/
     private ConsumeQueueExt consumeQueueExt = null;
 
     public ConsumeQueue(
@@ -62,7 +78,7 @@ public class ConsumeQueue {
             + File.separator + queueId;
 
         this.mappedFileQueue = new MappedFileQueue(queueDir, mappedFileSize, null);
-
+        //生成20个字节的缓冲区 使用的堆内内存
         this.byteBufferIndex = ByteBuffer.allocate(CQ_STORE_UNIT_SIZE);
 
         if (defaultMessageStore.getMessageStoreConfig().isEnableConsumeQueueExt()) {
@@ -85,6 +101,9 @@ public class ConsumeQueue {
         return result;
     }
 
+    /**
+     * 正常关闭后恢复
+     */
     public void recover() {
         final List<MappedFile> mappedFiles = this.mappedFileQueue.getMappedFiles();
         if (!mappedFiles.isEmpty()) {
@@ -152,14 +171,22 @@ public class ConsumeQueue {
         }
     }
 
+    /**
+     * 根据消息存储时间查找consumeQueue条目的逻辑偏移量
+     * @param timestamp
+     * @return
+     */
     public long getOffsetInQueueByTime(final long timestamp) {
+        //从第一个文件开始找找到第一个文件更新时间大于该时间戳的文件
         MappedFile mappedFile = this.mappedFileQueue.getMappedFileByTime(timestamp);
         if (mappedFile != null) {
             long offset = 0;
+            //二分查找 取consumeQueue的最小偏移量 和 该文件起始偏移量 二者中间位置为最小偏移量low
             int low = minLogicOffset > mappedFile.getFileFromOffset() ? (int) (minLogicOffset - mappedFile.getFileFromOffset()) : 0;
             int high = 0;
             int midOffset = -1, targetOffset = -1, leftOffset = -1, rightOffset = -1;
             long leftIndexValue = -1L, rightIndexValue = -1L;
+            //commitLog的最小偏移量
             long minPhysicOffset = this.defaultMessageStore.getMinPhyOffset();
             SelectMappedBufferResult sbr = mappedFile.selectMappedBuffer(0);
             if (null != sbr) {
@@ -221,31 +248,47 @@ public class ConsumeQueue {
         return 0;
     }
 
+    /**
+     * commitlog恢复阶段调用，让consumerQueue有效数据文件和CommitLog对齐 将超出最大偏移量的数据删除
+     * @param phyOffet 最大消息偏移量
+     */
     public void truncateDirtyLogicFiles(long phyOffet) {
 
+        //consumerQueue文件大小 20B * 30w
         int logicFileSize = this.mappedFileSize;
 
         this.maxPhysicOffset = phyOffet;
         long maxExtAddr = 1;
         while (true) {
+            //获取最后一个mappedFile
             MappedFile mappedFile = this.mappedFileQueue.getLastMappedFile();
             if (mappedFile != null) {
+                //获取切片
                 ByteBuffer byteBuffer = mappedFile.sliceByteBuffer();
 
                 mappedFile.setWrotePosition(0);
                 mappedFile.setCommittedPosition(0);
                 mappedFile.setFlushedPosition(0);
 
+                //从第一个数据单元遍历到consumerQueue文件对应mappedFile的最后一个数据单元
                 for (int i = 0; i < logicFileSize; i += CQ_STORE_UNIT_SIZE) {
+
+
+                    //数据单元 保存的commitlog的偏移量
                     long offset = byteBuffer.getLong();
+                    //数据单元 对应commitlog消息的大小
                     int size = byteBuffer.getInt();
+                    //数据单元 对应消息tag的hashcode
                     long tagsCode = byteBuffer.getLong();
 
                     if (0 == i) {
                         if (offset >= phyOffet) {
+                            //如果第一个数据单元数据的偏移量大于等于commitlog的最大偏移量，说明整个mappedFile为脏数据
+                            //删除掉最后一个mappedFile，于是倒数第二个mappedFile变为倒数第一个mappedFile，循环对其处理
                             this.mappedFileQueue.deleteLastMappedFile();
                             break;
                         } else {
+                            //如果第一个数据单元数据的偏移量小于commitlog的最大偏移量，则证明还需往后遍历寻找commitlog最大偏移量的位置
                             int pos = i + CQ_STORE_UNIT_SIZE;
                             mappedFile.setWrotePosition(pos);
                             mappedFile.setCommittedPosition(pos);
@@ -260,10 +303,14 @@ public class ConsumeQueue {
 
                         if (offset >= 0 && size > 0) {
 
+                            //如果某数据单元的保存的commitlog的偏移量大于等于commitlog最大消息偏移量 则证明找到了
+                            //有效数据和脏数据的交界点
                             if (offset >= phyOffet) {
                                 return;
                             }
 
+                            //继续往后找 只要某个数据单元的保存的commitlog的偏移量小于commitlog最大消息偏移量 则说明该数据单元数据是有效的
+                            //先把写位置，刷盘位置，提交位置都设置为该数据单元的偏移量
                             int pos = i + CQ_STORE_UNIT_SIZE;
                             mappedFile.setWrotePosition(pos);
                             mappedFile.setCommittedPosition(pos);
@@ -376,8 +423,16 @@ public class ConsumeQueue {
         return this.minLogicOffset / CQ_STORE_UNIT_SIZE;
     }
 
+    /**
+     * 上层DefaultMessageStore内部的异步线程调用，存储主模块开起了一个异步构建ConsumeQueue文件和索引的线程ReputMessageService
+     * 该线程启动后会监控commitlog文件的写入，每当有新数据写入后，该线程立马将其读出来封装成DispatchRequest对象
+     * 转发给ConsumeQueue或者IndexService
+     * @param request
+     */
     public void putMessagePositionInfoWrapper(DispatchRequest request) {
         final int maxRetries = 30;
+
+        //判断是否可写
         boolean canWrite = this.defaultMessageStore.getRunningFlags().isCQWriteable();
         for (int i = 0; i < maxRetries && canWrite; i++) {
             long tagsCode = request.getTagsCode();
@@ -395,13 +450,24 @@ public class ConsumeQueue {
                         topic, queueId, request.getCommitLogOffset());
                 }
             }
+
+            /**
+             * request.getCommitLogOffset(): 消息在commitlog内的物理偏移量
+             * request.getMsgSize()： 消息大小
+             * tagsCode：消息的tagCode
+             * request.getConsumeQueueOffset())：消息在consumeQueue内的逻辑偏移量 该偏移量*20B即为物理偏移量
+             *正常返回true
+             */
             boolean result = this.putMessagePositionInfo(request.getCommitLogOffset(),
                 request.getMsgSize(), tagsCode, request.getConsumeQueueOffset());
             if (result) {
+                //追加成功了
                 if (this.defaultMessageStore.getMessageStoreConfig().getBrokerRole() == BrokerRole.SLAVE ||
                     this.defaultMessageStore.getMessageStoreConfig().isEnableDLegerCommitLog()) {
+                    //#TODO
                     this.defaultMessageStore.getStoreCheckpoint().setPhysicMsgTimestamp(request.getStoreTimestamp());
                 }
+                //更新consumeQueue的最新存储时间
                 this.defaultMessageStore.getStoreCheckpoint().setLogicsMsgTimestamp(request.getStoreTimestamp());
                 return;
             } else {
@@ -422,25 +488,39 @@ public class ConsumeQueue {
         this.defaultMessageStore.getRunningFlags().makeLogicsQueueError();
     }
 
+    /**
+     * 插入ConsumeQueue数据
+     * @param offset 消息在commitlog内的物理偏移量
+     * @param size 消息大小
+     * @param tagsCode 消息的tagCode
+     * @param cqOffset 消息在consumeQueue内的逻辑偏移量 该偏移量*20B即为物理偏移量
+     * @return
+     */
     private boolean putMessagePositionInfo(final long offset, final int size, final long tagsCode,
         final long cqOffset) {
 
+
         if (offset + size <= this.maxPhysicOffset) {
+            //小于最大的物理偏移量说明要重写
             log.warn("Maybe try to build consume queue repeatedly maxPhysicOffset={} phyOffset={}", maxPhysicOffset, offset);
             return true;
         }
 
+        //封装consumeQueue数据单元 20字节
         this.byteBufferIndex.flip();
         this.byteBufferIndex.limit(CQ_STORE_UNIT_SIZE);
         this.byteBufferIndex.putLong(offset);
         this.byteBufferIndex.putInt(size);
         this.byteBufferIndex.putLong(tagsCode);
 
+        //真实物理偏移量
         final long expectLogicOffset = cqOffset * CQ_STORE_UNIT_SIZE;
 
+        //根据真实的物理偏移量获取mappedFile
         MappedFile mappedFile = this.mappedFileQueue.getLastMappedFile(expectLogicOffset);
         if (mappedFile != null) {
 
+            //如果是第一个mappedFile 并且为第一个数据单元 需要做一个前置填充
             if (mappedFile.isFirstCreateInQueue() && cqOffset != 0 && mappedFile.getWrotePosition() == 0) {
                 this.minLogicOffset = expectLogicOffset;
                 this.mappedFileQueue.setFlushedWhere(expectLogicOffset);
@@ -451,15 +531,19 @@ public class ConsumeQueue {
             }
 
             if (cqOffset != 0) {
+                //当前的相对于所有MappedFile的逻辑偏移量 = MappedFile的起始偏移量 + 当前MappedFile的写指针
                 long currentLogicOffset = mappedFile.getWrotePosition() + mappedFile.getFileFromOffset();
 
                 if (expectLogicOffset < currentLogicOffset) {
+                    //说明要重写ConsumeQueue的数据
                     log.warn("Build  consume queue repeatedly, expectLogicOffset: {} currentLogicOffset: {} Topic: {} QID: {} Diff: {}",
                         expectLogicOffset, currentLogicOffset, this.topic, this.queueId, expectLogicOffset - currentLogicOffset);
                     return true;
                 }
 
+
                 if (expectLogicOffset != currentLogicOffset) {
+                    //计算出如果不相等则证明consumeQueue可能乱序了，目前处于异常状态
                     LOG_ERROR.warn(
                         "[BUG]logic queue order maybe wrong, expectLogicOffset: {} currentLogicOffset: {} Topic: {} QID: {} Diff: {}",
                         expectLogicOffset,
@@ -470,7 +554,9 @@ public class ConsumeQueue {
                     );
                 }
             }
+            //正常情况下 文件尾追加消息 则当前ConsumeQueue 中最大的消息偏移量（commitLog中消息的偏移量）加 新增消息的长度
             this.maxPhysicOffset = offset + size;
+            //把最新数据单元添加到consumeQueue的mappedFile中
             return mappedFile.appendMessage(this.byteBufferIndex.array());
         }
         return false;
@@ -488,12 +574,21 @@ public class ConsumeQueue {
         }
     }
 
+    /**
+     * 根据逻辑偏移量消息消费队列的条目 startIndex是 consumeQueue数据单元的序号
+     *  物理偏移量 = startIndex * 20B
+     * @param startIndex 逻辑偏移量
+     * @return
+     */
     public SelectMappedBufferResult getIndexBuffer(final long startIndex) {
         int mappedFileSize = this.mappedFileSize;
         long offset = startIndex * CQ_STORE_UNIT_SIZE;
+        //若偏移量小于最小的consumeQueue的偏移量  则不在有效数据内
         if (offset >= this.getMinLogicOffset()) {
+            //获取偏移量对应consumeQueue的MappedFile
             MappedFile mappedFile = this.mappedFileQueue.findMappedFileByOffset(offset);
             if (mappedFile != null) {
+                //取出指定位置到读指针的buffer
                 SelectMappedBufferResult result = mappedFile.selectMappedBuffer((int) (offset % mappedFileSize));
                 return result;
             }
