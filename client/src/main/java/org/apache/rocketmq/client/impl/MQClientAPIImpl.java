@@ -613,6 +613,18 @@ public class MQClientAPIImpl {
         return sendResult;
     }
 
+    /**
+     *
+     * @param addr broker地址
+     * @param requestHeader 业务参数
+     * @param timeoutMillis 超时时间 30s
+     * @param communicationMode 请求类型 同步，异步，单向
+     * @param pullCallback 回调
+     * @return
+     * @throws RemotingException
+     * @throws MQBrokerException
+     * @throws InterruptedException
+     */
     public PullResult pullMessage(
         final String addr,
         final PullMessageRequestHeader requestHeader,
@@ -620,6 +632,7 @@ public class MQClientAPIImpl {
         final CommunicationMode communicationMode,
         final PullCallback pullCallback
     ) throws RemotingException, MQBrokerException, InterruptedException {
+        //封装成请求传输对象
         RemotingCommand request = RemotingCommand.createRequestCommand(RequestCode.PULL_MESSAGE, requestHeader);
 
         switch (communicationMode) {
@@ -653,6 +666,7 @@ public class MQClientAPIImpl {
                     try {
                         PullResult pullResult = MQClientAPIImpl.this.processPullResponse(response, addr);
                         assert pullResult != null;
+                        //调用拉消息处理回调
                         pullCallback.onSuccess(pullResult);
                     } catch (Exception e) {
                         pullCallback.onException(e);
@@ -706,6 +720,15 @@ public class MQClientAPIImpl {
         PullMessageResponseHeader responseHeader =
             (PullMessageResponseHeader) response.decodeCommandCustomHeader(PullMessageResponseHeader.class);
 
+        /**
+         * pullStatus 状态
+         * nextBeginOffset 下次拉取起始位置
+         * minOffset 队列的最小偏移量
+         * maxOffset 队列的最大偏移量
+         * msgFoundList
+         * suggestWhichBrokerId 下次推荐拉取brokerId
+         * messageBinary 消息二进制
+         */
         return new PullResultExt(pullStatus, responseHeader.getNextBeginOffset(), responseHeader.getMinOffset(),
             responseHeader.getMaxOffset(), null, responseHeader.getSuggestWhichBrokerId(), response.getBody());
     }

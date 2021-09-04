@@ -561,6 +561,16 @@ public class DefaultMessageStore implements MessageStore {
         return commitLog;
     }
 
+    /**
+     * 消费者拉取消息
+     * @param group 消费组
+     * @param topic topic
+     * @param queueId topic队列id
+     * @param offset 开始拉取消息的逻辑偏移量（consumequeue中的偏移量）
+     * @param maxMsgNums 拉消息数量
+     * @param messageFilter 消息过滤器（服务器一般是tagCode过滤）
+     * @return
+     */
     public GetMessageResult getMessage(final String group, final String topic, final int queueId, final long offset,
         final int maxMsgNums,
         final MessageFilter messageFilter) {
@@ -577,29 +587,44 @@ public class DefaultMessageStore implements MessageStore {
         long beginTime = this.getSystemClock().now();
 
         GetMessageStatus status = GetMessageStatus.NO_MESSAGE_IN_QUEUE;
+        //下次消息拉取的偏移量
         long nextBeginOffset = offset;
+        //队列中的最小逻辑偏移量
         long minOffset = 0;
+        //队列中的最大逻辑偏移量
         long maxOffset = 0;
 
         GetMessageResult getResult = new GetMessageResult();
-
+        //获取commitlog的最大物理偏移量
         final long maxOffsetPy = this.commitLog.getMaxOffset();
-
+        //获取topic队列的ConsumeQueue 该方法不会返回null，找不到就会新建一个
         ConsumeQueue consumeQueue = findConsumeQueue(topic, queueId);
         if (consumeQueue != null) {
+            //获取目标队列中的最大逻辑偏移量和最小逻辑偏移量
             minOffset = consumeQueue.getMinOffsetInQueue();
             maxOffset = consumeQueue.getMaxOffsetInQueue();
 
             if (maxOffset == 0) {
+                //该topic队列没有消息 外层会进行长轮询
                 status = GetMessageStatus.NO_MESSAGE_IN_QUEUE;
                 nextBeginOffset = nextOffsetCorrection(offset, 0);
             } else if (offset < minOffset) {
+                /**
+                 * 拉取消息偏移量小于队列的最小偏移量
+                 * 如果当前broker为主节点，下次拉取偏移量为0，如果当前节点为从节点且offsetCheckInSlave是true，则设置下次拉取偏移量为0
+                 * 如果当前节点为从节点且offsetCheckInSlave是false 则下次拉取时使用原偏移量
+                 */
                 status = GetMessageStatus.OFFSET_TOO_SMALL;
                 nextBeginOffset = nextOffsetCorrection(offset, minOffset);
             } else if (offset == maxOffset) {
+                //客户端已经消费到了最新消息，拉取消息偏移量等于队列的最大偏移量 下次拉取时使用原偏移量
                 status = GetMessageStatus.OFFSET_OVERFLOW_ONE;
                 nextBeginOffset = nextOffsetCorrection(offset, offset);
             } else if (offset > maxOffset) {
+                /**
+                 * 拉取消息偏移量大于队列的最大偏移量 偏移量越界
+                 * 如果当前最小偏移量为0 则下次拉取偏移量为0，如果当前最小偏移量不为0，则下次拉取偏移量为最大偏移量
+                 */
                 status = GetMessageStatus.OFFSET_OVERFLOW_BADLY;
                 if (0 == minOffset) {
                     nextBeginOffset = nextOffsetCorrection(offset, minOffset);
@@ -607,32 +632,78 @@ public class DefaultMessageStore implements MessageStore {
                     nextBeginOffset = nextOffsetCorrection(offset, maxOffset);
                 }
             } else {
+
+                /**
+                 * minOffset <=offset <= maxOffset 消息拉取偏移量在队列中 偏移量是满足查询条件的
+                 * 如果当前要拉取消息的offset不是正在顺序写的consumequeue文件时，数据范围为[offset，文件尾]
+                 * 如果当前要拉取消息的offset是正在顺序写的consumequeue文件时，数据范围为[offset，读指针]
+                 *
+                 */
                 SelectMappedBufferResult bufferConsumeQueue = consumeQueue.getIndexBuffer(offset);
                 if (bufferConsumeQueue != null) {
                     try {
+                        //设置返回状态为无匹配消息
                         status = GetMessageStatus.NO_MATCHED_MESSAGE;
 
+                        //下一个commitlog文件的物理偏移量
                         long nextPhyFileStartOffset = Long.MIN_VALUE;
+                        //记录当前队列拉取消息的最大物理偏移量
                         long maxPhyOffsetPulling = 0;
 
                         int i = 0;
+                        /**
+                         * 16000 避免一直拿不到拉取的消息（1 被过滤掉了 2、全过期了） 设置最多处理 16000个字节的consumequeue数据 即
+                         * 8000个consumequeue数据，就返回了
+                         */
                         final int maxFilterMessageCount = Math.max(16000, maxMsgNums * ConsumeQueue.CQ_STORE_UNIT_SIZE);
+                        //是否记录磁盘活动图
                         final boolean diskFallRecorded = this.messageStoreConfig.isDiskFallRecorded();
                         ConsumeQueueExt.CqExtUnit cqExtUnit = new ConsumeQueueExt.CqExtUnit();
                         for (; i < bufferConsumeQueue.getSize() && i < maxFilterMessageCount; i += ConsumeQueue.CQ_STORE_UNIT_SIZE) {
+                            //从bufferConsumeQueue中每次读取一个consumequeue数据单元
+
+                            //消息在commitlog的物理偏移量
                             long offsetPy = bufferConsumeQueue.getByteBuffer().getLong();
+                            //消息大小
                             int sizePy = bufferConsumeQueue.getByteBuffer().getInt();
+                            //tag的hashcode
                             long tagsCode = bufferConsumeQueue.getByteBuffer().getLong();
 
+                            //每次读取消息后 记录下记录当前队列拉取消息的最大物理偏移量
                             maxPhyOffsetPulling = offsetPy;
 
+
                             if (nextPhyFileStartOffset != Long.MIN_VALUE) {
+                                //
+                                /**
+                                 * 执行到这里是因为下面 去查询时对应commitlog文件被删除了，然后获取了下一个commitlog文件的偏移量
+                                 * 如果consumequeue数据单元的消息物理偏移量比删除commitlog文件的下一个文件偏移量还小，说明是过期删除的commitlog中的消息
+                                 * 直接跳过,知道consumequeue数据单元的消息物理偏移量比nextPhyFileStartOffset大为止
+                                 */
                                 if (offsetPy < nextPhyFileStartOffset)
                                     continue;
                             }
 
+                            /**
+                             * 判断当前拉的消息是热数据还是冷数据
+                             * offsetPy：本次循环处理的consumequeue数据单元对应消息的物理偏移量
+                             * maxOffsetPy：commitlog中的最大物理偏移量
+                             *
+                             * 返回 isInDisk
+                             *          true 冷数据
+                             *          false 热数据
+                             */
                             boolean isInDisk = checkInDiskByCommitOffset(offsetPy, maxOffsetPy);
 
+                            /**
+                             * 判断当前拉取消息的数量和大小是否达到了配置阈值，控制是否跳出循环，结束消息拉取
+                             * sizePy： 本次循环处理的consumequeue数据单元对应消息的大小
+                             * maxMsgNums： 拉取消息的最大数量 32
+                             * getResult.getBufferTotalSize()：本次拉取消息已经获取的消息总大小
+                             * getResult.getMessageCount()： 本次拉取消息已经获取的消息总数
+                             * isInDisk：本次循环处理的consumequeue数据单元对应消息是否是冷数据
+                             *
+                             */
                             if (this.isTheBatchFull(sizePy, maxMsgNums, getResult.getBufferTotalSize(), getResult.getMessageCount(),
                                 isInDisk)) {
                                 break;
@@ -651,6 +722,7 @@ public class DefaultMessageStore implements MessageStore {
                                 }
                             }
 
+                            //服务器根据tagCode做一次过滤
                             if (messageFilter != null
                                 && !messageFilter.isMatchedByConsumeQueue(isTagsCodeLegal ? tagsCode : null, extRet ? cqExtUnit : null)) {
                                 if (getResult.getBufferTotalSize() == 0) {
@@ -660,12 +732,19 @@ public class DefaultMessageStore implements MessageStore {
                                 continue;
                             }
 
+                            //根据consumequeue数据单元对应的commitlog的物理偏移量 和消息大小 去commitlog查询出对应的消息
                             SelectMappedBufferResult selectResult = this.commitLog.getMessage(offsetPy, sizePy);
+
+                            /**
+                             * 什么时候为null?
+                             *     查询之前commitlog删除过期文件的定时任务刚好执行过 ，将包含offsetPy物理偏移量消息的数据文件删除了
+                             */
                             if (null == selectResult) {
                                 if (getResult.getBufferTotalSize() == 0) {
                                     status = GetMessageStatus.MESSAGE_WAS_REMOVING;
                                 }
 
+                                //计算包含offsetPy偏移量文件的下一个文件的物理偏移量  回到上面循环
                                 nextPhyFileStartOffset = this.commitLog.rollNextFile(offsetPy);
                                 continue;
                             }
@@ -679,29 +758,44 @@ public class DefaultMessageStore implements MessageStore {
                                 selectResult.release();
                                 continue;
                             }
-
+                            //统计拉取消息数量
                             this.storeStatsService.getGetMessageTransferedMsgCount().incrementAndGet();
+                            //把查询到的消息加入到拉消息结果中
                             getResult.addMessage(selectResult);
                             status = GetMessageStatus.FOUND;
+                            //已经拉取到消息了 不用再跳过过期数据了
                             nextPhyFileStartOffset = Long.MIN_VALUE;
                         }
 
+                        //记录磁盘活动图
                         if (diskFallRecorded) {
                             long fallBehind = maxOffsetPy - maxPhyOffsetPulling;
                             brokerStatsManager.recordDiskFallBehindSize(group, topic, queueId, fallBehind);
                         }
 
+                        //下次拉取消息的offset
                         nextBeginOffset = offset + (i / ConsumeQueue.CQ_STORE_UNIT_SIZE);
 
+                        //commitlog的最大物理偏移量 - 本次拉消息的最大物理偏移量
                         long diff = maxOffsetPy - maxPhyOffsetPulling;
+
+
                         long memory = (long) (StoreUtil.TOTAL_PHYSICAL_MEMORY_SIZE
                             * (this.messageStoreConfig.getAccessMessageInMemoryMaxRatio() / 100.0));
+
+                        /**
+                         * 判断下次拉取的消息是热数据还是冷数据 推荐下次去哪个broker拉取
+                         * diff > memory  true  冷数据  下次去从节点拉取消息
+                         *                false 热数据 下次在主节点拉取消息
+                         */
                         getResult.setSuggestPullingFromSlave(diff > memory);
                     } finally {
 
+                        //释放查询consumequeue的SelectMappedBufferResult对象
                         bufferConsumeQueue.release();
                     }
                 } else {
+                    //只有很极端的情况下才会返回null  刚刚赶上consumequeue删除过期数据的逻辑执行
                     status = GetMessageStatus.OFFSET_FOUND_NULL;
                     nextBeginOffset = nextOffsetCorrection(offset, consumeQueue.rollNextFile(offset));
                     log.warn("consumer request topic: " + topic + "offset: " + offset + " minOffset: " + minOffset + " maxOffset: "
@@ -709,21 +803,28 @@ public class DefaultMessageStore implements MessageStore {
                 }
             }
         } else {
+
             status = GetMessageStatus.NO_MATCHED_LOGIC_QUEUE;
             nextBeginOffset = nextOffsetCorrection(offset, 0);
         }
 
+        //统计消息拉取成功和失败的次数
         if (GetMessageStatus.FOUND == status) {
             this.storeStatsService.getGetMessageTimesTotalFound().incrementAndGet();
         } else {
             this.storeStatsService.getGetMessageTimesTotalMiss().incrementAndGet();
         }
         long elapsedTime = this.getSystemClock().now() - beginTime;
+        //记录拉取总耗时
         this.storeStatsService.setGetMessageEntireTimeMax(elapsedTime);
 
+        //设置结果状态
         getResult.setStatus(status);
+        //设置客户端下次拉取消息偏移量
         getResult.setNextBeginOffset(nextBeginOffset);
+        //设置队列consumequeue中的最大逻辑偏移量
         getResult.setMaxOffset(maxOffset);
+        //设置队列consumequeue中的最小逻辑偏移量
         getResult.setMinOffset(minOffset);
         return getResult;
     }
@@ -1218,6 +1319,12 @@ public class DefaultMessageStore implements MessageStore {
         return null;
     }
 
+    /**
+     * 根据topic和队列id查找ConsumeQueue 如果找不到也会新建一个
+     * @param topic topic
+     * @param queueId topic队列id
+     * @return
+     */
     public ConsumeQueue findConsumeQueue(String topic, int queueId) {
         ConcurrentMap<Integer, ConsumeQueue> map = consumeQueueTable.get(topic);
         if (null == map) {
@@ -1257,34 +1364,66 @@ public class DefaultMessageStore implements MessageStore {
         return nextOffset;
     }
 
+    /**
+     *判断读取消息是热数据还是冷数据
+     * @param offsetPy 读取消息的物理偏移量
+     * @param maxOffsetPy commitlog中的最大物理偏移量
+     * @return
+     */
     private boolean checkInDiskByCommitOffset(long offsetPy, long maxOffsetPy) {
+        //物理内存的40%
         long memory = (long) (StoreUtil.TOTAL_PHYSICAL_MEMORY_SIZE * (this.messageStoreConfig.getAccessMessageInMemoryMaxRatio() / 100.0));
+        //如果读取消息偏移量和最大消息偏移量之间已经超过 物理内存的40% 那么数据就在磁盘上了
         return (maxOffsetPy - offsetPy) > memory;
     }
 
+    /**
+     *
+     * @Description
+     *   * 控制是否跳出循环
+     * @Param  sizePy： 本次循环处理的consumequeue数据单元对应消息的大小
+     * @Param  maxMsgNums： 拉取消息的最大数量 32
+     * @Param  bufferTotal：本次拉取消息已经获取的消息总大小
+     * @Param  messageTotal：本次拉取消息已经获取的消息总数
+     * @Param  isInDisk：本次循环处理的consumequeue数据单元对应消息是否是冷数据
+     * @Return boolean
+     *              true 拉消息跳出循环
+     *              false 继续获取消息
+     */
     private boolean isTheBatchFull(int sizePy, int maxMsgNums, int bufferTotal, int messageTotal, boolean isInDisk) {
 
+
         if (0 == bufferTotal || 0 == messageTotal) {
+            //还未拉取到任何消息
             return false;
         }
 
         if (maxMsgNums <= messageTotal) {
+            //拉取消息已经达到目标数量了（32）
             return true;
         }
 
         if (isInDisk) {
+            //冷数据
+
+            //冷数据 拉取消息最多一次可以拉取64KB消息
             if ((bufferTotal + sizePy) > this.messageStoreConfig.getMaxTransferBytesOnMessageInDisk()) {
                 return true;
             }
 
+            //冷数据 拉取消息最多一次可以拉取8条消息
             if (messageTotal > this.messageStoreConfig.getMaxTransferCountOnMessageInDisk() - 1) {
                 return true;
             }
         } else {
+            //热数据
+
+            //热数据一次可以拉取256KB消息
             if ((bufferTotal + sizePy) > this.messageStoreConfig.getMaxTransferBytesOnMessageInMemory()) {
                 return true;
             }
 
+            //热数据一次可以拉取32条消息
             if (messageTotal > this.messageStoreConfig.getMaxTransferCountOnMessageInMemory() - 1) {
                 return true;
             }

@@ -16,7 +16,6 @@
  */
 package org.apache.rocketmq.client.consumer;
 
-import java.util.Set;
 import org.apache.rocketmq.client.MQAdmin;
 import org.apache.rocketmq.client.exception.MQBrokerException;
 import org.apache.rocketmq.client.exception.MQClientException;
@@ -24,28 +23,43 @@ import org.apache.rocketmq.common.message.MessageExt;
 import org.apache.rocketmq.common.message.MessageQueue;
 import org.apache.rocketmq.remoting.exception.RemotingException;
 
+import java.util.Set;
+
 /**
  * Message queue consumer interface
  */
 public interface MQConsumer extends MQAdmin {
     /**
-     * If consuming failure,message will be send back to the brokers,and delay consuming some time
+     * 消息消费失败重新发送到Broker服务器
+     * @param msg 消息
+     * @param delayLevel 消息延迟级别
+     * @throws RemotingException
+     * @throws MQBrokerException
+     * @throws InterruptedException
+     * @throws MQClientException
      */
     @Deprecated
     void sendMessageBack(final MessageExt msg, final int delayLevel) throws RemotingException,
         MQBrokerException, InterruptedException, MQClientException;
 
     /**
-     * If consuming failure,message will be send back to the broker,and delay consuming some time
+     * 消息消费失败重新发送到Broker服务器
+     * @param msg 消息
+     * @param delayLevel 消息延迟级别
+     * @param brokerName broker名称
+     * @throws RemotingException
+     * @throws MQBrokerException
+     * @throws InterruptedException
+     * @throws MQClientException
      */
     void sendMessageBack(final MessageExt msg, final int delayLevel, final String brokerName)
         throws RemotingException, MQBrokerException, InterruptedException, MQClientException;
 
     /**
-     * Fetch message queues from consumer cache according to the topic
-     *
-     * @param topic message topic
-     * @return queue set
+     * 获取主题topic分配了消费者哪些消息队列
+     * @param topic 主题
+     * @return 队列信息
+     * @throws MQClientException
      */
     Set<MessageQueue> fetchSubscribeMessageQueues(final String topic) throws MQClientException;
 }

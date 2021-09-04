@@ -17,9 +17,13 @@
 package org.apache.rocketmq.common.sysflag;
 
 public class PullSysFlag {
+    /**是否提交消费者本地该队列的offset*/
     private final static int FLAG_COMMIT_OFFSET = 0x1;
+    /**是否允许服务器端长轮询 （一般是1）*/
     private final static int FLAG_SUSPEND = 0x1 << 1;
+    /**是否提交消费者本地该主题的订阅信息 （一般是0）*/
     private final static int FLAG_SUBSCRIPTION = 0x1 << 2;
+    /**是否为类过滤 （一般是0）*/
     private final static int FLAG_CLASS_FILTER = 0x1 << 3;
     private final static int FLAG_LITE_PULL_MESSAGE = 0x1 << 4;
 

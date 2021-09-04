@@ -17,6 +17,9 @@
 package org.apache.rocketmq.common.consumer;
 
 public enum ConsumeFromWhere {
+    /**
+     * 从队列当前最大的偏移量开始消费，即队列中追加新消息时，消费者开始消费
+     */
     CONSUME_FROM_LAST_OFFSET,
 
     @Deprecated
@@ -25,6 +28,12 @@ public enum ConsumeFromWhere {
     CONSUME_FROM_MIN_OFFSET,
     @Deprecated
     CONSUME_FROM_MAX_OFFSET,
+    /**
+     * 从队列当前最小的偏移量开始消费
+     */
     CONSUME_FROM_FIRST_OFFSET,
+    /**
+     * 从客户端指定的时间戳，计算出与时间戳最接近的一条消息开始消费
+     */
     CONSUME_FROM_TIMESTAMP,
 }

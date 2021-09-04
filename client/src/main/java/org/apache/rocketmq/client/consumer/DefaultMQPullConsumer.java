@@ -16,8 +16,6 @@
  */
 package org.apache.rocketmq.client.consumer;
 
-import java.util.HashSet;
-import java.util.Set;
 import org.apache.rocketmq.client.ClientConfig;
 import org.apache.rocketmq.client.QueryResult;
 import org.apache.rocketmq.client.consumer.rebalance.AllocateMessageQueueAveragely;
@@ -34,6 +32,9 @@ import org.apache.rocketmq.common.protocol.heartbeat.MessageModel;
 import org.apache.rocketmq.remoting.RPCHook;
 import org.apache.rocketmq.remoting.exception.RemotingException;
 
+import java.util.HashSet;
+import java.util.Set;
+
 /**
  * Default pulling consumer.
  * This class will be removed in 2022, and a better implementation {@link DefaultLitePullConsumer} is recommend to use
@@ -45,32 +46,31 @@ public class DefaultMQPullConsumer extends ClientConfig implements MQPullConsume
     protected final transient DefaultMQPullConsumerImpl defaultMQPullConsumerImpl;
 
     /**
-     * Do the same thing for the same Group, the application must be set,and guarantee Globally unique
+     * 消费组名
      */
     private String consumerGroup;
     /**
-     * Long polling mode, the Consumer connection max suspend time, it is not recommended to modify
+     * 长轮询下，broker最大挂起请求时间，不建议修改
      */
     private long brokerSuspendMaxTimeMillis = 1000 * 20;
     /**
-     * Long polling mode, the Consumer connection timeout(must greater than brokerSuspendMaxTimeMillis), it is not
-     * recommended to modify
+     * 长轮询下消费者的最大请求超时时间，必须比brokerSuspendMaxTimeMillis大，不建议修改
      */
     private long consumerTimeoutMillisWhenSuspend = 1000 * 30;
     /**
-     * The socket timeout in milliseconds
+     * 消费者拉取消息时socket超时时间
      */
     private long consumerPullTimeoutMillis = 1000 * 10;
     /**
-     * Consumption pattern,default is clustering
+     * 消费模式 集群模式和广播模式
      */
     private MessageModel messageModel = MessageModel.CLUSTERING;
     /**
-     * Message queue listener
+     * 消息路由信息变化时回调处理监听器 一般在重平衡时会被调用
      */
     private MessageQueueListener messageQueueListener;
     /**
-     * Offset Storage
+     * 消费进度存储实现
      */
     private OffsetStore offsetStore;
     /**
@@ -78,7 +78,7 @@ public class DefaultMQPullConsumer extends ClientConfig implements MQPullConsume
      */
     private Set<String> registerTopics = new HashSet<String>();
     /**
-     * Queue allocation algorithm
+     * topic队列分配策略
      */
     private AllocateMessageQueueStrategy allocateMessageQueueStrategy = new AllocateMessageQueueAveragely();
     /**
@@ -86,6 +86,7 @@ public class DefaultMQPullConsumer extends ClientConfig implements MQPullConsume
      */
     private boolean unitMode = false;
 
+    /**最大重试次数*/
     private int maxReconsumeTimes = 16;
 
     public DefaultMQPullConsumer() {

@@ -16,9 +16,6 @@
  */
 package org.apache.rocketmq.client.impl.consumer;
 
-import java.util.List;
-import java.util.Set;
-import java.util.concurrent.TimeUnit;
 import org.apache.rocketmq.client.consumer.AllocateMessageQueueStrategy;
 import org.apache.rocketmq.client.consumer.store.OffsetStore;
 import org.apache.rocketmq.client.consumer.store.ReadOffsetType;
@@ -31,6 +28,10 @@ import org.apache.rocketmq.common.message.MessageQueue;
 import org.apache.rocketmq.common.protocol.heartbeat.ConsumeType;
 import org.apache.rocketmq.common.protocol.heartbeat.MessageModel;
 import org.apache.rocketmq.common.protocol.heartbeat.SubscriptionData;
+
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 public class RebalancePushImpl extends RebalanceImpl {
     private final static long UNLOCK_DELAY_TIME_MILLS = Long.parseLong(System.getProperty("rocketmq.client.unlockDelayTimeMills", "20000"));
@@ -53,6 +54,7 @@ public class RebalancePushImpl extends RebalanceImpl {
          * When rebalance result changed, should update subscription's version to notify broker.
          * Fix: inconsistency subscription may lead to consumer miss messages.
          */
+        //更新订阅信息表对应topic的版本号
         SubscriptionData subscriptionData = this.subscriptionInner.get(topic);
         long newVersion = System.currentTimeMillis();
         log.info("{} Rebalance changed, also update version: {}, {}", topic, subscriptionData.getSubVersion(), newVersion);
@@ -60,14 +62,18 @@ public class RebalancePushImpl extends RebalanceImpl {
 
         int currentQueueCount = this.processQueueTable.size();
         if (currentQueueCount != 0) {
+            //主题流控，一个Topic本地所有processQueue能缓存的最大消息数，超过该值则采取拉取流控措施
             int pullThresholdForTopic = this.defaultMQPushConsumerImpl.getDefaultMQPushConsumer().getPullThresholdForTopic();
             if (pullThresholdForTopic != -1) {
+                //因为重平衡后分配给消费者的队列数可能发生变化 ，需重新计算本地队列快照（processQueue）中缓存的最大消息数，
+                // 本地队列快照（processQueue）中缓存的最大消息数 = 主题流控配置值Topic本地所有processQueue能缓存的最大消息数/队列数量
                 int newVal = Math.max(1, pullThresholdForTopic / currentQueueCount);
                 log.info("The pullThresholdForQueue is changed from {} to {}",
                     this.defaultMQPushConsumerImpl.getDefaultMQPushConsumer().getPullThresholdForQueue(), newVal);
                 this.defaultMQPushConsumerImpl.getDefaultMQPushConsumer().setPullThresholdForQueue(newVal);
             }
-
+            //因为重平衡后分配给消费者的队列数可能发生变化 ，需重新计算本地队列快照（processQueue）中缓存的最大消息大小，
+            // 本地队列快照（processQueue）中缓存的最大消息大小 = 主题流控配置值Topic本地所有processQueue能缓存的最大消息大小/队列数量
             int pullThresholdSizeForTopic = this.defaultMQPushConsumerImpl.getDefaultMQPushConsumer().getPullThresholdSizeForTopic();
             if (pullThresholdSizeForTopic != -1) {
                 int newVal = Math.max(1, pullThresholdSizeForTopic / currentQueueCount);
@@ -77,13 +83,15 @@ public class RebalancePushImpl extends RebalanceImpl {
             }
         }
 
-        // notify broker
+        // 向broker发生心跳数据
         this.getmQClientFactory().sendHeartbeatToAllBrokerWithLock();
     }
 
     @Override
     public boolean removeUnnecessaryMessageQueue(MessageQueue mq, ProcessQueue pq) {
+        //持久化消费进度到mq归属的broker节点
         this.defaultMQPushConsumerImpl.getOffsetStore().persist(mq);
+        // 本地移除当前队列的偏移量
         this.defaultMQPushConsumerImpl.getOffsetStore().removeOffset(mq);
         if (this.defaultMQPushConsumerImpl.isConsumeOrderly()
             && MessageModel.CLUSTERING.equals(this.defaultMQPushConsumerImpl.messageModel())) {
@@ -152,6 +160,7 @@ public class RebalancePushImpl extends RebalanceImpl {
     @Override
     public long computePullFromWhereWithException(MessageQueue mq) throws MQClientException {
         long result = -1;
+        //获取ConsumeFromWhere策略
         final ConsumeFromWhere consumeFromWhere = this.defaultMQPushConsumerImpl.getDefaultMQPushConsumer().getConsumeFromWhere();
         final OffsetStore offsetStore = this.defaultMQPushConsumerImpl.getOffsetStore();
         switch (consumeFromWhere) {

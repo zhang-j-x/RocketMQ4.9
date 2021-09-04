@@ -26,12 +26,16 @@ import org.apache.rocketmq.remoting.exception.RemotingCommandException;
 
 public class PullMessageResponseHeader implements CommandCustomHeader {
     @CFNotNull
+    /**下次该topic队列拉取建议使用的brokerId*/
     private Long suggestWhichBrokerId;
     @CFNotNull
+    /**下次拉取的偏移量*/
     private Long nextBeginOffset;
     @CFNotNull
+    /**队列最小偏移量*/
     private Long minOffset;
     @CFNotNull
+    /**队列最大偏移量*/
     private Long maxOffset;
 
     @Override

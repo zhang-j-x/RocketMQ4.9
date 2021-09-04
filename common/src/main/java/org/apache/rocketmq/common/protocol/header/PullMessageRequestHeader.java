@@ -27,25 +27,43 @@ import org.apache.rocketmq.remoting.exception.RemotingCommandException;
 
 public class PullMessageRequestHeader implements CommandCustomHeader {
     @CFNotNull
+    /**消费组*/
     private String consumerGroup;
     @CFNotNull
+    /**主题*/
     private String topic;
     @CFNotNull
+    /**topic队列id*/
     private Integer queueId;
     @CFNotNull
+    /**待拉取的下一条消息的offset*/
     private Long queueOffset;
     @CFNotNull
+    /**拉消息的数量 默认32*/
     private Integer maxMsgNums;
     @CFNotNull
+    /**
+     *高4位未使用
+     *低4位：
+     *    第1位：是否提交消费者本地该队列的offset （一般是1）
+     *    第2位：是否允许服务器端长轮询 （一般是1）
+     *    第3位：是否提交消费者本地该主题的订阅信息 （一般是0）
+     *    第4位：是否为类过滤 （一般是0）
+     */
     private Integer sysFlag;
     @CFNotNull
+    /**本地该队列的消费进度*/
     private Long commitOffset;
     @CFNotNull
+    /**服务器长轮询时 连接最长保持时间 15s*/
     private Long suspendTimeoutMillis;
     @CFNullable
+    /**客户端topic订阅数据中的过滤表达式*/
     private String subscription;
     @CFNotNull
+    /**客户端topic订阅数据的版本*/
     private Long subVersion;
+    /**表达式类型 分为TAG和SQL92*/
     private String expressionType;
 
     @Override

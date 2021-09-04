@@ -16,9 +16,6 @@
  */
 package org.apache.rocketmq.client.consumer;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Set;
 import org.apache.rocketmq.client.ClientConfig;
 import org.apache.rocketmq.client.QueryResult;
 import org.apache.rocketmq.client.consumer.listener.MessageListener;
@@ -45,6 +42,10 @@ import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.remoting.RPCHook;
 import org.apache.rocketmq.remoting.exception.RemotingException;
 
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
+
 /**
  * In most scenarios, this is the mostly recommended class to consume messages.
  * </p>
@@ -65,168 +66,127 @@ public class DefaultMQPushConsumer extends ClientConfig implements MQPushConsume
     private final InternalLogger log = ClientLogger.getLog();
 
     /**
-     * Internal implementation. Most of the functions herein are delegated to it.
+     * 消费者实现对象
      */
     protected final transient DefaultMQPushConsumerImpl defaultMQPushConsumerImpl;
 
     /**
-     * Consumers of the same role is required to have exactly same subscriptions and consumerGroup to correctly achieve
-     * load balance. It's required and needs to be globally unique.
-     * </p>
-     *
-     * See <a href="http://rocketmq.apache.org/docs/core-concept/">here</a> for further discussion.
+     * 消费者组
      */
     private String consumerGroup;
 
     /**
-     * Message model defines the way how messages are delivered to each consumer clients.
-     * </p>
-     *
-     * RocketMQ supports two message models: clustering and broadcasting. If clustering is set, consumer clients with
-     * the same {@link #consumerGroup} would only consume shards of the messages subscribed, which achieves load
-     * balances; Conversely, if the broadcasting is set, each consumer client will consume all subscribed messages
-     * separately.
-     * </p>
-     *
-     * This field defaults to clustering.
+     * 消费模式：支持集群模式和广播模式，默认集群模式
      */
     private MessageModel messageModel = MessageModel.CLUSTERING;
 
     /**
-     * Consuming point on consumer booting.
-     * </p>
+     * 从broker获取当前消费组 该消息队列的offset不存在时，consumeFromWhere有效，从当前consumeFromWhere开始消费
+     * 默认：CONSUME_FROM_LAST_OFFSET
+     *       CONSUME_FROM_LAST_OFFSET ：从队列当前最大的偏移量开始消费，即队列中追加新消息时，消费者开始消费
+     *       CONSUME_FROM_FIRST_OFFSET ：从队列当前最小的偏移量开始消费
+     *       CONSUME_FROM_TIMESTAMP：从客户端指定的时间戳，计算出与时间戳最接近的一条消息开始消费
      *
-     * There are three consuming points:
-     * <ul>
-     * <li>
-     * <code>CONSUME_FROM_LAST_OFFSET</code>: consumer clients pick up where it stopped previously.
-     * If it were a newly booting up consumer client, according aging of the consumer group, there are two
-     * cases:
-     * <ol>
-     * <li>
-     * if the consumer group is created so recently that the earliest message being subscribed has yet
-     * expired, which means the consumer group represents a lately launched business, consuming will
-     * start from the very beginning;
-     * </li>
-     * <li>
-     * if the earliest message being subscribed has expired, consuming will start from the latest
-     * messages, meaning messages born prior to the booting timestamp would be ignored.
-     * </li>
-     * </ol>
-     * </li>
-     * <li>
-     * <code>CONSUME_FROM_FIRST_OFFSET</code>: Consumer client will start from earliest messages available.
-     * </li>
-     * <li>
-     * <code>CONSUME_FROM_TIMESTAMP</code>: Consumer client will start from specified timestamp, which means
-     * messages born prior to {@link #consumeTimestamp} will be ignored
-     * </li>
-     * </ul>
      */
     private ConsumeFromWhere consumeFromWhere = ConsumeFromWhere.CONSUME_FROM_LAST_OFFSET;
 
     /**
-     * Backtracking consumption time with second precision. Time format is
-     * 20131223171201<br>
-     * Implying Seventeen twelve and 01 seconds on December 23, 2013 year<br>
-     * Default backtracking consumption time Half an hour ago.
+     * 客户端传递时间戳
+     * 当consumeFromWhere配置为ConsumeFromWhere.CONSUME_FROM_TIMESTAMP时有效，并且broker不存在该消费者在对应队列的消费位移时有效
+     *会使用该时间戳，计算出与时间戳最接近的一条消息开始消费
      */
     private String consumeTimestamp = UtilAll.timeMillisToHumanString3(System.currentTimeMillis() - (1000 * 60 * 30));
 
     /**
-     * Queue allocation algorithm specifying how message queues are allocated to each consumer clients.
+     * 集群模式下消息队列的负载策略
      */
     private AllocateMessageQueueStrategy allocateMessageQueueStrategy;
 
     /**
-     * Subscription relationship
+     * 订阅信息集合
+     *      key: topic
+     *      value: 过滤表达式
      */
     private Map<String /* topic */, String /* sub expression */> subscription = new HashMap<String, String>();
 
     /**
-     * Message listener
+     * 消息监听器 消息的处理逻辑
+     *      1、MessageListenerConcurrently 2、MessageListenerOrderly
      */
     private MessageListener messageListener;
 
     /**
-     * Offset Storage
+     * 消费者本地消费进度存储（一般为RemoteBrokerOffsetStore）
      */
     private OffsetStore offsetStore;
 
     /**
-     * Minimum consumer thread number
+     * 消费服务线程池 线程数最小值
      */
     private int consumeThreadMin = 20;
 
     /**
-     * Max consumer thread number
+     * 消费服务线程池 线程数最大值
      */
     private int consumeThreadMax = 20;
 
     /**
      * Threshold for dynamic adjustment of the number of thread pool
+     * 该参数作废 无效...
      */
     private long adjustThreadPoolNumsThreshold = 100000;
 
     /**
-     * Concurrently max span offset.it has no effect on sequential consumption
+     * 并发消息消费时处理队列的最大跨度，默认是2000，如果跨度大于该值，拉取变慢。表示如果消息处理队列中偏移量最大的消息和偏移量最小的消息跨度超过2000则延迟50ms再拉取消息
+     * 本地队列快照（processQueue）中，第一条消息和最后一条消息的offset跨度不能超过2000
      */
     private int consumeConcurrentlyMaxSpan = 2000;
 
     /**
-     * Flow control threshold on queue level, each message queue will cache at most 1000 messages by default,
-     * Consider the {@code pullBatchSize}, the instantaneous value may exceed the limit
+     *
+     * 队列流控： 本地队列快照（processQueue）中缓存的最大消息数 超过该值则采取拉取流控措施
      */
     private int pullThresholdForQueue = 1000;
 
     /**
-     * Limit the cached message size on queue level, each message queue will cache at most 100 MiB messages by default,
-     * Consider the {@code pullBatchSize}, the instantaneous value may exceed the limit
-     *
-     * <p>
-     * The size of a message only measured by message body, so it's not accurate
+    *  队列流控： 本地队列快照（processQueue）中缓存的最大消息大小，单位MB 超过该值则采取拉取流控措施
      */
     private int pullThresholdSizeForQueue = 100;
 
+
+
     /**
-     * Flow control threshold on topic level, default value is -1(Unlimited)
-     * <p>
-     * The value of {@code pullThresholdForQueue} will be overwrote and calculated based on
-     * {@code pullThresholdForTopic} if it is't unlimited
-     * <p>
-     * For example, if the value of pullThresholdForTopic is 1000 and 10 message queues are assigned to this consumer,
-     * then pullThresholdForQueue will be set to 100
+     * 主题流控，一个Topic本地所有processQueue能缓存的最大消息数，超过该值则采取拉取流控措施
+     * 消费者消费的指定主题的所有消息在本地不能超过pullThresholdForTopic的值，-1表示不限制，该值根据pullThresholdForQueue的配置决定是否生效，
+     * 该配置项优先级低于pullThresholdForQueue
      */
     private int pullThresholdForTopic = -1;
 
+
     /**
-     * Limit the cached message size on topic level, default value is -1 MiB(Unlimited)
-     * <p>
-     * The value of {@code pullThresholdSizeForQueue} will be overwrote and calculated based on
-     * {@code pullThresholdSizeForTopic} if it is't unlimited
-     * <p>
-     * For example, if the value of pullThresholdSizeForTopic is 1000 MiB and 10 message queues are
-     * assigned to this consumer, then pullThresholdSizeForQueue will be set to 100 MiB
+     * 主题流控，一个Topic本地所有processQueue能缓存的最大消息大小，单位MB，超过该值则采取拉取流控措施
+     * 消费者消费的指定主题的所有消息在本地不能超过pullThresholdSizeForTopic MiB的大小，-1表示不限制，该值根据pullThresholdSizeForQueue的配置决定是否生效，
+     * 该配置项优先级低于pullThresholdSizeForQueue
      */
     private int pullThresholdSizeForTopic = -1;
 
     /**
-     * Message pull Interval
+     * 推模式下 拉取任务的间隔时间 默认一次的拉取任务完成继续拉取 单位ms
      */
     private long pullInterval = 0;
 
     /**
-     * Batch consumption size
+     * 消费任务最多可消费消息的数量
      */
     private int consumeMessageBatchMaxSize = 1;
 
     /**
-     * Batch pull size
+     * 每次消息拉取拉取的消息数量
      */
     private int pullBatchSize = 32;
 
     /**
-     * Whether update subscription relationship when every pull
+     * 是否每次拉取时都更新订阅信息（过滤信息） 默认不提交 心跳时订阅数据已经同步到broker 没必要再提交
      */
     private boolean postSubscriptionWhenPull = false;
 
@@ -236,26 +196,23 @@ public class DefaultMQPushConsumer extends ClientConfig implements MQPushConsume
     private boolean unitMode = false;
 
     /**
-     * Max re-consume times. -1 means 16 times.
-     * </p>
+     * 消息最大重复消费次数  默认配置-1 表示默认最大重试次数16 次
      *
-     * If messages are re-consumed more than {@link #maxReconsumeTimes} before success, it's be directed to a deletion
-     * queue waiting.
      */
     private int maxReconsumeTimes = -1;
 
     /**
-     * Suspending pulling time for cases requiring slow pulling like flow-control scenario.
+     * 短轮询设置的挂起时间，延迟将该队列的消息提交到消费者线程的等待时间 默认延迟1s
      */
     private long suspendCurrentQueueTimeMillis = 1000;
 
     /**
-     * Maximum amount of time in minutes a message may block the consuming thread.
+     * 消息消费超时时间 15分钟  如果本地某条消息15分钟还未消费 将会回退该消息
      */
     private long consumeTimeout = 15;
 
     /**
-     * Maximum time to await message consuming when shutdown consumer, 0 indicates no await.
+     * 消费者停止后 等待消息消费的最长时间 默认0
      */
     private long awaitTerminationMillisWhenShutdown = 0;
 

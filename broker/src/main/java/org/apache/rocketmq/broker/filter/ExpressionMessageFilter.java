@@ -77,7 +77,7 @@ public class ExpressionMessageFilter implements MessageFilter {
             if (subscriptionData.getSubString().equals(SubscriptionData.SUB_ALL)) {
                 return true;
             }
-
+            //tagCode是否在tagCodeSet中 这里是比较的tag的hashCode，是不准确的 所以客户端还要过滤
             return subscriptionData.getCodeSet().contains(tagsCode.intValue());
         } else {
             // no expression or no bloom

@@ -16,12 +16,13 @@
  */
 package org.apache.rocketmq.client.consumer.rebalance;
 
-import java.util.ArrayList;
-import java.util.List;
 import org.apache.rocketmq.client.consumer.AllocateMessageQueueStrategy;
 import org.apache.rocketmq.client.log.ClientLogger;
-import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.common.message.MessageQueue;
+import org.apache.rocketmq.logging.InternalLogger;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Average Hashing queue algorithm
@@ -29,6 +30,14 @@ import org.apache.rocketmq.common.message.MessageQueue;
 public class AllocateMessageQueueAveragely implements AllocateMessageQueueStrategy {
     private final InternalLogger log = ClientLogger.getLog();
 
+    /**
+     *
+     * @param consumerGroup 消费者组
+     * @param currentCID 消费者客户端id
+     * @param mqAll 某主题下所有队列
+     * @param cidAll 消费组内消费者id集合
+     * @return
+     */
     @Override
     public List<MessageQueue> allocate(String consumerGroup, String currentCID, List<MessageQueue> mqAll,
         List<String> cidAll) {

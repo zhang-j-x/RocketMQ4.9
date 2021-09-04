@@ -230,17 +230,15 @@ public class MQClientInstance {
                     if (null == this.clientConfig.getNamesrvAddr()) {
                         this.mQClientAPIImpl.fetchNameServerAddr();
                     }
-                    // Start request-response channel
                     //启动客户端网络层
                     this.mQClientAPIImpl.start();
-                    // Start various schedule tasks
                     //启动定时任务入口
                     this.startScheduledTask();
-                    // Start pull service
+                    // 启动消息拉取服务
                     this.pullMessageService.start();
-                    // Start rebalance service
+                    // 启动重平衡服务
                     this.rebalanceService.start();
-                    // Start push service
+                    // 启动生产者
                     this.defaultMQProducer.getDefaultMQProducerImpl().start(false);
                     log.info("the client factory [{}] start OK", this.clientId);
                     this.serviceState = ServiceState.RUNNING;
@@ -627,12 +625,23 @@ public class MQClientInstance {
      * @return
      */
 
+
+
     /**
      * 发送消息（特殊情况）：发送消息一般情况调用，nameServer上没有对应的topic数据，拿到了空数据对象
      * @param topic 主题名称
      * @param isDefault isDefault -> true
      * @param defaultMQProducer 生产者对象
      * @return
+     */
+
+    /**
+     * 消费者启动 更新消费者关注主题的路由数据
+     * @param topic 主题名称
+     * @param isDefault isDefault -> false
+     * @param defaultMQProducer null
+     * @return
+     *
      */
     public boolean updateTopicRouteInfoFromNameServer(final String topic, boolean isDefault,
         DefaultMQProducer defaultMQProducer) {
@@ -656,7 +665,7 @@ public class MQClientInstance {
                         topicRouteData = this.mQClientAPIImpl.getTopicRouteInfoFromNameServer(topic, 1000 * 3);
                     }
                     if (topicRouteData != null) {
-                        //获取当前客户端本地的该topicd的路由数据
+                        //获取当前客户端本地的该topic的路由数据
                         TopicRouteData old = this.topicRouteTable.get(topic);
                         //判断nameServer上的路由数据是否和本地路由数据相同
                         boolean changed = topicRouteDataIsChange(old, topicRouteData);
@@ -676,7 +685,7 @@ public class MQClientInstance {
                                 this.brokerAddrTable.put(bd.getBrokerName(), bd.getBrokerAddrs());
                             }
 
-                            // Update Pub info
+                            // 更新生产者的主题路由数据 最后把主题路由数据放到生产者的主题发布信息映射表中
                             {
                                 TopicPublishInfo publishInfo = topicRouteData2TopicPublishInfo(topic, topicRouteData);
                                 publishInfo.setHaveTopicRouterInfo(true);
@@ -690,7 +699,7 @@ public class MQClientInstance {
                                 }
                             }
 
-                            // Update sub info
+                            // 更新消费者的主题路由数据 最后把主题路由数据放到重平衡实现对象的订阅主题队列信息表中
                             {
                                 Set<MessageQueue> subscribeInfo = topicRouteData2TopicSubscribeInfo(topic, topicRouteData);
                                 Iterator<Entry<String, MQConsumerInner>> it = this.consumerTable.entrySet().iterator();
@@ -1008,6 +1017,7 @@ public class MQClientInstance {
     }
 
     public void doRebalance() {
+        //获取当前客户端的所有消费者组 对每个消费者执行重平衡操作
         for (Map.Entry<String, MQConsumerInner> entry : this.consumerTable.entrySet()) {
             MQConsumerInner impl = entry.getValue();
             if (impl != null) {
@@ -1067,6 +1077,13 @@ public class MQClientInstance {
         return null;
     }
 
+    /**
+     *
+     * @param brokerName broker名称
+     * @param brokerId brokerId
+     * @param onlyThisBroker
+     * @return
+     */
     public FindBrokerResult findBrokerAddressInSubscribe(
         final String brokerName,
         final long brokerId,
