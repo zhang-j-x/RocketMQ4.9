@@ -42,7 +42,7 @@ public abstract class RebalanceImpl {
     /**订阅主题队列信息表*/
     protected final ConcurrentMap<String/* topic */, Set<MessageQueue>> topicSubscribeInfoTable =
         new ConcurrentHashMap<String, Set<MessageQueue>>();
-    /**订阅信息表*/
+    /**订阅信息表  消费组订阅主题后会放入数据*/
     protected final ConcurrentMap<String /* topic */, SubscriptionData> subscriptionInner =
         new ConcurrentHashMap<String, SubscriptionData>();
     /**消费组*/

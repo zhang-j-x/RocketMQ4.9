@@ -376,6 +376,7 @@ public class CommitLog {
                 {
                     String t = propertiesMap.get(MessageConst.PROPERTY_DELAY_TIME_LEVEL);
                     if (TopicValidator.RMQ_SYS_SCHEDULE_TOPIC.equals(topic) && t != null) {
+                        //如果消息的主题是SCHEDULE_TOPIC_XXXX
                         int delayLevel = Integer.parseInt(t);
 
                         if (delayLevel > this.defaultMessageStore.getScheduleMessageService().getMaxDelayLevel()) {
@@ -383,6 +384,7 @@ public class CommitLog {
                         }
 
                         if (delayLevel > 0) {
+                            //计算了一个交付时间  存储时间 + 延时时间 + 1s
                             tagsCode = this.defaultMessageStore.getScheduleMessageService().computeDeliverTimestamp(delayLevel,
                                 storeTimestamp);
                         }
@@ -605,21 +607,27 @@ public class CommitLog {
         final int tranType = MessageSysFlag.getTransactionValue(msg.getSysFlag());
         if (tranType == MessageSysFlag.TRANSACTION_NOT_TYPE
                 || tranType == MessageSysFlag.TRANSACTION_COMMIT_TYPE) {
-            // Delay Delivery
+            // 延迟级别大于0  说明为延迟消息
             if (msg.getDelayTimeLevel() > 0) {
                 if (msg.getDelayTimeLevel() > this.defaultMessageStore.getScheduleMessageService().getMaxDelayLevel()) {
                     msg.setDelayTimeLevel(this.defaultMessageStore.getScheduleMessageService().getMaxDelayLevel());
                 }
-
+                //延迟消息的主题为调度主题 SCHEDULE_TOPIC_XXXX
                 topic = TopicValidator.RMQ_SYS_SCHEDULE_TOPIC;
+                //延迟级别-1 得到队列id （一个延迟级别对应一个队列 延迟级别从1开始 队列id从0开始）
                 queueId = ScheduleMessageService.delayLevel2QueueId(msg.getDelayTimeLevel());
 
-                // Backup real topic, queueId
+                /**
+                 * 记录真实的主题和队列
+                 * key： "REAL_TOPIC"
+                 * key："REAL_QID"
+                 */
                 MessageAccessor.putProperty(msg, MessageConst.PROPERTY_REAL_TOPIC, msg.getTopic());
                 MessageAccessor.putProperty(msg, MessageConst.PROPERTY_REAL_QUEUE_ID, String.valueOf(msg.getQueueId()));
                 msg.setPropertiesString(MessageDecoder.messageProperties2String(msg.getProperties()));
-
+                //设置主题为调度主题 SCHEDULE_TOPIC_XXXX
                 msg.setTopic(topic);
+                //设置对应延迟级别的队列id
                 msg.setQueueId(queueId);
             }
         }

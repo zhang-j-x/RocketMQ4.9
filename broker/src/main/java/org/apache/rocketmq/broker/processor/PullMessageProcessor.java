@@ -509,8 +509,10 @@ public class PullMessageProcessor extends AsyncNettyRequestProcessor implements 
                     //立马重试
                     break;
                 case ResponseCode.PULL_OFFSET_MOVED:
+                    //拉取偏移量非法
                     if (this.brokerController.getMessageStoreConfig().getBrokerRole() != BrokerRole.SLAVE
                         || this.brokerController.getMessageStoreConfig().isOffsetCheckInSlave()) {
+                        //如果当前节点是master或者是slave但是进行了偏移量检查  返回拉取偏移量非法
                         MessageQueue mq = new MessageQueue();
                         mq.setTopic(requestHeader.getTopic());
                         mq.setQueueId(requestHeader.getQueueId());
@@ -521,12 +523,14 @@ public class PullMessageProcessor extends AsyncNettyRequestProcessor implements 
                         event.setMessageQueue(mq);
                         event.setOffsetRequest(requestHeader.getQueueOffset());
                         event.setOffsetNew(getMessageResult.getNextBeginOffset());
+                        //向内部的消息队列OFFSET_MOVED_EVENT发了条消息
                         this.generateOffsetMovedEvent(event);
                         log.warn(
                             "PULL_OFFSET_MOVED:correction offset. topic={}, groupId={}, requestOffset={}, newOffset={}, suggestBrokerId={}",
                             requestHeader.getTopic(), requestHeader.getConsumerGroup(), event.getOffsetRequest(), event.getOffsetNew(),
                             responseHeader.getSuggestWhichBrokerId());
                     } else {
+                        //如果当前节点是slave 则建议客户端立马去master拉取
                         responseHeader.setSuggestWhichBrokerId(subscriptionGroupConfig.getBrokerId());
                         response.setCode(ResponseCode.PULL_RETRY_IMMEDIATELY);
                         log.warn("PULL_OFFSET_MOVED:none correction. topic={}, groupId={}, requestOffset={}, suggestBrokerId={}",

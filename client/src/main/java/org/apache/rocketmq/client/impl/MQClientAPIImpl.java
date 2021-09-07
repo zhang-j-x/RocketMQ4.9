@@ -664,9 +664,10 @@ public class MQClientAPIImpl {
                 RemotingCommand response = responseFuture.getResponseCommand();
                 if (response != null) {
                     try {
+                        //状态转换 解析响应头 封装拉取消息结果
                         PullResult pullResult = MQClientAPIImpl.this.processPullResponse(response, addr);
                         assert pullResult != null;
-                        //调用拉消息处理回调
+                        //调用拉消息处理回调  调用DefaultMQPushConsumerImpl#pullMessage 中声明的拉取消息回调
                         pullCallback.onSuccess(pullResult);
                     } catch (Exception e) {
                         pullCallback.onException(e);
@@ -695,6 +696,14 @@ public class MQClientAPIImpl {
         return this.processPullResponse(response, addr);
     }
 
+    /**
+     * 状态转换 解析响应头 封装拉取消息结果
+     * @param response 响应
+     * @param addr broker地址
+     * @return
+     * @throws MQBrokerException
+     * @throws RemotingCommandException
+     */
     private PullResult processPullResponse(
         final RemotingCommand response,
         final String addr) throws MQBrokerException, RemotingCommandException {
@@ -1021,6 +1030,18 @@ public class MQClientAPIImpl {
         return response.getCode() == ResponseCode.SUCCESS;
     }
 
+    /**
+     * 消费者消息回退到broker
+     * @param addr broker地址
+     * @param msg 消息
+     * @param consumerGroup 消费组
+     * @param delayLevel 延迟级别
+     * @param timeoutMillis 超时时间
+     * @param maxConsumeRetryTimes 最多消费次数
+     * @throws RemotingException
+     * @throws MQBrokerException
+     * @throws InterruptedException
+     */
     public void consumerSendMessageBack(
         final String addr,
         final MessageExt msg,

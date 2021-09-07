@@ -493,7 +493,7 @@ public class ConsumeQueue {
      * @param offset 消息在commitlog内的物理偏移量
      * @param size 消息大小
      * @param tagsCode 消息的tagCode
-     * @param cqOffset 消息在consumeQueue内的逻辑偏移量 该偏移量*20B即为物理偏移量
+     * @param cqOffset 消息在consumeQueue内的逻辑偏移量 该偏移量*20B即为真正偏移量
      * @return
      */
     private boolean putMessagePositionInfo(final long offset, final int size, final long tagsCode,
@@ -588,7 +588,11 @@ public class ConsumeQueue {
             //获取偏移量对应consumeQueue的MappedFile
             MappedFile mappedFile = this.mappedFileQueue.findMappedFileByOffset(offset);
             if (mappedFile != null) {
-                //取出指定位置到读指针的buffer
+                /**
+                 *
+                 * 如果当前要拉取消息的offset不是正在顺序写的consumequeue文件时，数据范围为[offset，文件尾]
+                 * 如果当前要拉取消息的offset是正在顺序写的consumequeue文件时，数据范围为[offset，读指针]
+                 */
                 SelectMappedBufferResult result = mappedFile.selectMappedBuffer((int) (offset % mappedFileSize));
                 return result;
             }

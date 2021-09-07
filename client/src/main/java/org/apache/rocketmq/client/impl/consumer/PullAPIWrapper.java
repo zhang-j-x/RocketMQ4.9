@@ -78,14 +78,14 @@ public class PullAPIWrapper {
     public PullResult processPullResult(final MessageQueue mq, final PullResult pullResult,
         final SubscriptionData subscriptionData) {
         PullResultExt pullResultExt = (PullResultExt) pullResult;
-        //更新pullFromWhichNodeTable
+        //将下次拉消息推荐节点保存到pullFromWhichNodeTable
         this.updatePullFromWhichNode(mq, pullResultExt.getSuggestWhichBrokerId());
         if (PullStatus.FOUND == pullResult.getPullStatus()) {
             ByteBuffer byteBuffer = ByteBuffer.wrap(pullResultExt.getMessageBinary());
             //解码成消息
             List<MessageExt> msgList = MessageDecoder.decodes(byteBuffer);
 
-            //客户端过滤
+            //客户端过滤 用tag值过滤
             List<MessageExt> msgListFilterAgain = msgList;
             if (!subscriptionData.getTagsSet().isEmpty() && !subscriptionData.isClassFilterMode()) {
                 msgListFilterAgain = new ArrayList<MessageExt>(msgList.size());
@@ -98,6 +98,7 @@ public class PullAPIWrapper {
                 }
             }
 
+            //客户端执行hook过滤
             if (this.hasHook()) {
                 FilterMessageContext filterMessageContext = new FilterMessageContext();
                 filterMessageContext.setUnitMode(unitMode);
@@ -110,16 +111,23 @@ public class PullAPIWrapper {
                 if (Boolean.parseBoolean(traFlag)) {
                     msg.setTransactionId(msg.getProperty(MessageConst.PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX));
                 }
+                //给消息添加三个属性
+
+                //队列最小偏移量
                 MessageAccessor.putProperty(msg, MessageConst.PROPERTY_MIN_OFFSET,
                     Long.toString(pullResult.getMinOffset()));
+                //队列最大偏移量
                 MessageAccessor.putProperty(msg, MessageConst.PROPERTY_MAX_OFFSET,
                     Long.toString(pullResult.getMaxOffset()));
+                //broker名称
                 msg.setBrokerName(mq.getBrokerName());
             }
 
+            //将过滤后的消息保存到pullResult
             pullResultExt.setMsgFoundList(msgListFilterAgain);
         }
 
+        //help gc
         pullResultExt.setMessageBinary(null);
 
         return pullResult;

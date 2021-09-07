@@ -611,8 +611,8 @@ public class DefaultMessageStore implements MessageStore {
             } else if (offset < minOffset) {
                 /**
                  * 拉取消息偏移量小于队列的最小偏移量
-                 * 如果当前broker为主节点，下次拉取偏移量为0，如果当前节点为从节点且offsetCheckInSlave是true，则设置下次拉取偏移量为0
-                 * 如果当前节点为从节点且offsetCheckInSlave是false 则下次拉取时使用原偏移量
+                 * 如果当前broker为主节点，下次拉取偏移量为队列最小偏移量，如果当前节点为从节点且offsetCheckInSlave是true，则设置下次拉取偏移量为队列最小偏移量
+                 * 如果当前节点为从节点且offsetCheckInSlave是false 则下次拉取时使用原偏移量，并且建议建议客户端立马去master拉取
                  */
                 status = GetMessageStatus.OFFSET_TOO_SMALL;
                 nextBeginOffset = nextOffsetCorrection(offset, minOffset);
@@ -634,7 +634,7 @@ public class DefaultMessageStore implements MessageStore {
             } else {
 
                 /**
-                 * minOffset <=offset <= maxOffset 消息拉取偏移量在队列中 偏移量是满足查询条件的
+                 * minOffset <=offset < maxOffset 消息拉取偏移量在队列中 偏移量是满足查询条件的
                  * 如果当前要拉取消息的offset不是正在顺序写的consumequeue文件时，数据范围为[offset，文件尾]
                  * 如果当前要拉取消息的offset是正在顺序写的consumequeue文件时，数据范围为[offset，读指针]
                  *
@@ -678,7 +678,8 @@ public class DefaultMessageStore implements MessageStore {
                                 /**
                                  * 执行到这里是因为下面 去查询时对应commitlog文件被删除了，然后获取了下一个commitlog文件的偏移量
                                  * 如果consumequeue数据单元的消息物理偏移量比删除commitlog文件的下一个文件偏移量还小，说明是过期删除的commitlog中的消息
-                                 * 直接跳过,知道consumequeue数据单元的消息物理偏移量比nextPhyFileStartOffset大为止
+                                 * 直接跳过,consumequeue数据单元的消息物理偏移量比nextPhyFileStartOffset大为止，也就是跳过删除commitlog对应在consumequeue中的数据
+                                 * 最后返回状态GetMessageStatus.MESSAGE_WAS_REMOVING，说明消息在下一个commitlog文件中
                                  */
                                 if (offsetPy < nextPhyFileStartOffset)
                                     continue;
@@ -797,6 +798,7 @@ public class DefaultMessageStore implements MessageStore {
                 } else {
                     //只有很极端的情况下才会返回null  刚刚赶上consumequeue删除过期数据的逻辑执行
                     status = GetMessageStatus.OFFSET_FOUND_NULL;
+                    //设置下次拉取的偏移量为下个consumequeue文件的起始偏移量
                     nextBeginOffset = nextOffsetCorrection(offset, consumeQueue.rollNextFile(offset));
                     log.warn("consumer request topic: " + topic + "offset: " + offset + " minOffset: " + minOffset + " maxOffset: "
                         + maxOffset + ", but access logic queue failed.");
@@ -875,12 +877,19 @@ public class DefaultMessageStore implements MessageStore {
         return 0;
     }
 
+    /**
+     * 根据物理偏移量获取commitlog中的消息
+     * @param commitLogOffset physical offset.
+     * @return
+     */
     public MessageExt lookMessageByOffset(long commitLogOffset) {
+        //先查消息大小 因为消息大小是不确定的
         SelectMappedBufferResult sbr = this.commitLog.getMessage(commitLogOffset, 4);
         if (null != sbr) {
             try {
                 // 1 TOTALSIZE
                 int size = sbr.getByteBuffer().getInt();
+                //查询消息
                 return lookMessageByOffset(commitLogOffset, size);
             } finally {
                 sbr.release();
@@ -1255,11 +1264,21 @@ public class DefaultMessageStore implements MessageStore {
         return messageIds;
     }
 
+    /**
+     * 判断 消费偏移量对应的commitlog消息是冷数据
+     *                      true 冷数据 在磁盘上
+     *                      false 热数据 内存里
+     * @param topic topic.
+     * @param queueId queue ID.
+     * @param consumeOffset consume queue offset.
+     * @return
+     */
     @Override
     public boolean checkInDiskByConsumeOffset(final String topic, final int queueId, long consumeOffset) {
 
+        //获取commitlog的最大物理位移
         final long maxOffsetPy = this.commitLog.getMaxOffset();
-
+        //找到主题和队列对应的consumequeue
         ConsumeQueue consumeQueue = findConsumeQueue(topic, queueId);
         if (consumeQueue != null) {
             SelectMappedBufferResult bufferConsumeQueue = consumeQueue.getIndexBuffer(consumeOffset);
@@ -1267,6 +1286,7 @@ public class DefaultMessageStore implements MessageStore {
                 try {
                     for (int i = 0; i < bufferConsumeQueue.getSize(); ) {
                         i += ConsumeQueue.CQ_STORE_UNIT_SIZE;
+                        //对应消息commitlog的物理位移
                         long offsetPy = bufferConsumeQueue.getByteBuffer().getLong();
                         return checkInDiskByCommitOffset(offsetPy, maxOffsetPy);
                     }

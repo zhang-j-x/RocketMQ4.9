@@ -86,10 +86,12 @@ public class ProcessQueue {
      */
     public void cleanExpiredMsg(DefaultMQPushConsumer pushConsumer) {
         if (pushConsumer.getDefaultMQPushConsumerImpl().isConsumeOrderly()) {
+            //顺序消费不会执行清理过期消息的逻辑
             return;
         }
 
         int loop = msgTreeMap.size() < 16 ? msgTreeMap.size() : 16;
+        //遍历消息
         for (int i = 0; i < loop; i++) {
             MessageExt msg = null;
             try {
@@ -99,7 +101,7 @@ public class ProcessQueue {
                     if (!msgTreeMap.isEmpty() && System.currentTimeMillis() - Long.parseLong(MessageAccessor.getConsumeStartTimeStamp(msgTreeMap.firstEntry().getValue())) > pushConsumer.getConsumeTimeout() * 60 * 1000) {
                         msg = msgTreeMap.firstEntry().getValue();
                     } else {
-
+                        //processQueue中数据是有顺序的，TreeMap按照消息偏移量存放的数据，如果先取出来的消息没有过期则剩下的都不是过期消息 直接跳出
                         break;
                     }
                 } finally {
@@ -110,12 +112,18 @@ public class ProcessQueue {
             }
 
             try {
-                //回退并延迟三个级别
+                //消息回退
+                //重新发送到消息队列中并延迟三个级别
                 pushConsumer.sendMessageBack(msg, 3);
                 log.info("send expire msg back. topic={}, msgId={}, storeHost={}, queueId={}, queueOffset={}", msg.getTopic(), msg.getMsgId(), msg.getStoreHost(), msg.getQueueId(), msg.getQueueOffset());
                 try {
                     this.treeMapLock.writeLock().lockInterruptibly();
                     try {
+                        /**
+                         * 再次判断消息有没有消费
+                         *  条件成立：消息回退期间，消费者并没有消费该过期消息
+                         *  条件不成立： 消息回退期间，消费者将该过期消息消费了，并从msgTreeMap中将该条任务移除了
+                         */
                         if (!msgTreeMap.isEmpty() && msg.getQueueOffset() == msgTreeMap.firstKey()) {
                             try {
                                 //把消息移除
@@ -210,7 +218,10 @@ public class ProcessQueue {
      *  从msgTreeMap移除
      *  消息总数减少
      * @param msgs 消息
-     * @return
+     * @return long 表示本地ProcessQueue的消费进度
+     *              -1 ProcessQueue没数据
+     *              queueOffsetMax + 1 删完这批msgs后没消息了
+     *              删完后该ProcessQueue还有消息 返回ProcessQueue第一条消息的偏移量
      */
     public long removeMessage(final List<MessageExt> msgs) {
         long result = -1;

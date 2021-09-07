@@ -16,8 +16,9 @@
  */
 package org.apache.rocketmq.common.filter;
 
-import java.net.URL;
 import org.apache.rocketmq.common.protocol.heartbeat.SubscriptionData;
+
+import java.net.URL;
 
 public class FilterAPI {
     public static URL classFile(final String className) {
@@ -40,17 +41,20 @@ public class FilterAPI {
         SubscriptionData subscriptionData = new SubscriptionData();
         subscriptionData.setTopic(topic);
         subscriptionData.setSubString(subString);
-
+        //如果过滤表达式 为空 或者 SUB_ALL即*,就证明不用过滤，直接设置SUB_ALL
         if (null == subString || subString.equals(SubscriptionData.SUB_ALL) || subString.length() == 0) {
             subscriptionData.setSubString(SubscriptionData.SUB_ALL);
         } else {
+            //分割
             String[] tags = subString.split("\\|\\|");
             if (tags.length > 0) {
                 for (String tag : tags) {
                     if (tag.length() > 0) {
                         String trimString = tag.trim();
                         if (trimString.length() > 0) {
+                            //tag放在tagSet里面
                             subscriptionData.getTagsSet().add(trimString);
+                            //tag的hashcode放在codeSet里面
                             subscriptionData.getCodeSet().add(trimString.hashCode());
                         }
                     }

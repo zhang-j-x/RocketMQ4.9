@@ -26,10 +26,13 @@ import org.apache.rocketmq.remoting.exception.RemotingCommandException;
 
 public class QueryConsumerOffsetRequestHeader implements CommandCustomHeader {
     @CFNotNull
+    /**消费组*/
     private String consumerGroup;
     @CFNotNull
+    /**主题*/
     private String topic;
     @CFNotNull
+    /**topic队列id*/
     private Integer queueId;
 
     @Override
