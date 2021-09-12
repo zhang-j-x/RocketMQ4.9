@@ -41,8 +41,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class ScheduleMessageService extends ConfigManager {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
 
+    /**第一次调度时延迟的时间*/
     private static final long FIRST_DELAY_TIME = 1000L;
+    /**每个延时级别调度一次后延时该时间间隔后再放入调度池*/
     private static final long DELAY_FOR_A_WHILE = 100L;
+    /**发送异常后延迟该时间再参与调度*/
     private static final long DELAY_FOR_A_PERIOD = 10000L;
 
     /**
@@ -56,6 +59,7 @@ public class ScheduleMessageService extends ConfigManager {
      */
     private final ConcurrentMap<Integer /* level */, Long/* offset */> offsetTable =
         new ConcurrentHashMap<Integer, Long>(32);
+    /**消息存储模块*/
     private final DefaultMessageStore defaultMessageStore;
     /**启动状态*/
     private final AtomicBoolean started = new AtomicBoolean(false);
@@ -242,7 +246,11 @@ public class ScheduleMessageService extends ConfigManager {
     class DeliverDelayedMessageTimerTask extends TimerTask {
         /**延迟队列任务处理的延迟级别*/
         private final int delayLevel;
-        /**延迟队列任务处理的延迟队列的消费进度*/
+        /**
+         * 延迟队列任务处理的延迟队列的消费进度
+         *      ScheduleMessageService#load方法 将磁盘的消费进度加载到offsetTable
+         *      ScheduleMessageService#start方法为每个延迟级别队列创建调度任务时，从offsetTable取出对应消费队列的消费进度传入DeliverDelayedMessageTimerTask
+         */
         private final long offset;
 
         public DeliverDelayedMessageTimerTask(int delayLevel, long offset) {
@@ -385,9 +393,6 @@ public class ScheduleMessageService extends ConfigManager {
                                     } catch (Exception e) {
                                         /*
                                          * XXX: warn and notify me
-
-
-
                                          */
                                         log.error(
                                             "ScheduleMessageService, messageTimeup execute error, drop it. msgExt="
@@ -396,7 +401,7 @@ public class ScheduleMessageService extends ConfigManager {
                                     }
                                 }
                             } else {
-                                //消息还未到达交付时间 再次创建延迟任务 延迟时间为countdown
+                                //消息还未到达交付时间 再次创建延迟任务 延迟时间为countdown，因为同一个队列的消息是按顺序的，如果前面的消息没到交付时间，那么后面的消息也没到交付时间
                                 ScheduleMessageService.this.timer.schedule(
                                     new DeliverDelayedMessageTimerTask(this.delayLevel, nextOffset),
                                     countdown);
@@ -469,4 +474,6 @@ public class ScheduleMessageService extends ConfigManager {
             return msgInner;
         }
     }
+
+
 }

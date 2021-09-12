@@ -338,7 +338,7 @@ public class ConsumeMessageConcurrentlyService implements ConsumeMessageService 
         }
 
         /**
-         * 删除已经消费成功的消息并且返回返回消息的最小偏移量
+         * 删除已经消费了的消息（不管成功还是失败）并且返回返回消息的最小偏移量
          * offset表示本地ProcessQueue的消费进度
          *  (1) 返回-1 ProcessQueue没数据
          *  (2) 返回queueOffsetMax + 1 删完这批msgs后没消息了
@@ -357,7 +357,7 @@ public class ConsumeMessageConcurrentlyService implements ConsumeMessageService 
         long offset = consumeRequest.getProcessQueue().removeMessage(consumeRequest.getMsgs());
 
         if (offset >= 0 && !consumeRequest.getProcessQueue().isDropped()) {
-            //更新该mq的消费进度
+            //更新本地客户端消息消费进度表该mq的消费进度
             this.defaultMQPushConsumerImpl.getOffsetStore().updateOffset(consumeRequest.getMessageQueue(), offset, true);
         }
     }

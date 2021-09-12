@@ -95,9 +95,18 @@ public class RebalancePushImpl extends RebalanceImpl {
         this.defaultMQPushConsumerImpl.getOffsetStore().removeOffset(mq);
         if (this.defaultMQPushConsumerImpl.isConsumeOrderly()
             && MessageModel.CLUSTERING.equals(this.defaultMQPushConsumerImpl.messageModel())) {
+
+
+            /**
+             * 集群模式顺序消费执行逻辑
+             *
+             * 尝试去拿本地ProcessQueue的消费锁，设置超时时间为1s
+             *      如果拿到锁说明ProcessQueue中没有消费任务在执行 否则说明当前ProcessQueue还有消费任务在执行
+             */
             try {
                 if (pq.getConsumeLock().tryLock(1000, TimeUnit.MILLISECONDS)) {
                     try {
+                        //拿锁成功 说明消费任务已经释放锁了 释放broker端的分布式锁
                         return this.unlockDelay(mq, pq);
                     } finally {
                         pq.getConsumeLock().unlock();
@@ -120,8 +129,10 @@ public class RebalancePushImpl extends RebalanceImpl {
 
     private boolean unlockDelay(final MessageQueue mq, final ProcessQueue pq) {
 
+        //判断ProcessQueue里面有没有数据
         if (pq.hasTempMessage()) {
             log.info("[{}]unlockDelay, begin {} ", mq.hashCode(), mq);
+            //ProcessQueue里面有数据时 延迟20s释放队列分布式锁 这里是确保全局范围内只有一个消费任务执行
             this.defaultMQPushConsumerImpl.getmQClientFactory().getScheduledExecutorService().schedule(new Runnable() {
                 @Override
                 public void run() {
@@ -130,6 +141,7 @@ public class RebalancePushImpl extends RebalanceImpl {
                 }
             }, UNLOCK_DELAY_TIME_MILLS, TimeUnit.MILLISECONDS);
         } else {
+            //执行到这里说明消费者本地消费任务已经退出了 释放分布式锁
             this.unlock(mq, true);
         }
         return true;

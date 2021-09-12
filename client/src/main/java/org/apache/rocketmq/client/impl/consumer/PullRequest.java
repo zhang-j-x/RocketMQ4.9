@@ -27,7 +27,7 @@ public class PullRequest {
     private ProcessQueue processQueue;
     /**拉消息请求使用的offset*/
     private long nextOffset;
-    /**是否被锁定*/
+    /**是否被锁定 用来判断重平衡后分配给当前消费者的消费队列是否第一次拉取消息*/
     private boolean previouslyLocked = false;
 
     public boolean isPreviouslyLocked() {

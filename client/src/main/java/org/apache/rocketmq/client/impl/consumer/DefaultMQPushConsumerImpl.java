@@ -113,7 +113,7 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
     private ConsumeMessageService consumeMessageService;
     /**流控次数 1000次流控打印一次日志*/
     private long queueFlowControlTimes = 0;
-    /**是否暂停*/
+    /**并发消费 消息跨度流控次数*/
     private long queueMaxSpanFlowControlTimes = 0;
 
     public DefaultMQPushConsumerImpl(DefaultMQPushConsumer defaultMQPushConsumer, RPCHook rpcHook) {
@@ -290,27 +290,34 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
         } else {
             //顺序消费
             if (processQueue.isLocked()) {
+                //如果消费队列 broker端分布式锁由当前消费者持有
+                //判断是否是当前消费者第一次拉取该消费队列消息（重平衡后该消费队列作为新队列分配给了当前消费者）
                 if (!pullRequest.isPreviouslyLocked()) {
                     long offset = -1L;
                     try {
+                        //如果是新分配给当前消费者的消费队列，且第一次拉取消息，从broker端获取该消费队列的消费进度
                         offset = this.rebalanceImpl.computePullFromWhereWithException(pullRequest.getMessageQueue());
                     } catch (MQClientException e) {
                         this.executePullRequestLater(pullRequest, pullTimeDelayMillsWhenException);
                         log.error("Failed to compute pull offset, pullResult: {}", pullRequest, e);
                         return;
                     }
+
                     boolean brokerBusy = offset < pullRequest.getNextOffset();
                     log.info("the first time to pull message, so fix offset from broker. pullRequest: {} NewOffset: {} brokerBusy: {}",
                         pullRequest, offset, brokerBusy);
                     if (brokerBusy) {
+                        //如果拉取进度大于broker端存储的消费进度  打印相关日志
                         log.info("[NOTIFYME]the first time to pull message, but pull request offset larger than broker consume offset. pullRequest: {} NewOffset: {}",
                             pullRequest, offset);
                     }
-
+                    //锁定 表明已经拉取过一次消息 下次拉取消息时，不需要校验拉取偏移量是否比broker端消费进度大了
                     pullRequest.setPreviouslyLocked(true);
+                    //设置拉消息偏移量为broker端的消费进度
                     pullRequest.setNextOffset(offset);
                 }
             } else {
+                //如果当前消费者并没有持有消费队列在broker端的分布式锁 则创建一个延迟任务 3s后重新将消息拉取请求加入到PullMessageService的请求队列
                 this.executePullRequestLater(pullRequest, pullTimeDelayMillsWhenException);
                 log.info("pull message later because not locked in broker, {}", pullRequest);
                 return;
@@ -373,7 +380,10 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
                                 DefaultMQPushConsumerImpl.this.getConsumerStatsManager().incPullTPS(pullRequest.getConsumerGroup(),
                                     pullRequest.getMessageQueue().getTopic(), pullResult.getMsgFoundList().size());
 
-                                //将所有消息放入processQueue
+                                /**
+                                 * 将所有消息放入processQueue
+                                 *
+                                 */
                                 boolean dispatchToConsume = processQueue.putMessage(pullResult.getMsgFoundList());
 
                                 /**
@@ -1350,7 +1360,7 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
 
             //说明该消息时被重复消费的消息
             if (retryTopic != null && groupTopic.equals(msg.getTopic())) {
-                //将重复消费的消息主题修改为重试主题
+                //将重复消费的消息主题修改为原始主题
                 msg.setTopic(retryTopic);
             }
 

@@ -17,14 +17,18 @@
 
 package org.apache.rocketmq.common.protocol.body;
 
-import java.util.HashSet;
-import java.util.Set;
 import org.apache.rocketmq.common.message.MessageQueue;
 import org.apache.rocketmq.remoting.protocol.RemotingSerializable;
 
+import java.util.HashSet;
+import java.util.Set;
+
 public class LockBatchRequestBody extends RemotingSerializable {
+    /**消费者组*/
     private String consumerGroup;
+    /**客户端id*/
     private String clientId;
+    /**需要获取broker端分布式锁的topic队列*/
     private Set<MessageQueue> mqSet = new HashSet<MessageQueue>();
 
     public String getConsumerGroup() {

@@ -53,11 +53,16 @@ public class ProcessQueue {
     /**ProcessQueue中的消息总大小*/
     private final AtomicLong msgSize = new AtomicLong();
 
+    /**
+     * 顺序消费相关 顺序消费任务执行的时候锁住该消费锁 执行完毕后解锁
+     */
     private final Lock consumeLock = new ReentrantLock();
     /**
-     *msgTreeMap的子集只有顺序消费的时候才用的到
+     *顺序消费相关 msgTreeMap的子集只有顺序消费的时候才用的到
      */
     private final TreeMap<Long, MessageExt> consumingMsgOrderlyTreeMap = new TreeMap<Long, MessageExt>();
+
+
     private final AtomicLong tryUnlockTimes = new AtomicLong(0);
     /**ProcessQueue中包含的最大队列偏移量*/
     private volatile long queueOffsetMax = 0L;
@@ -67,8 +72,15 @@ public class ProcessQueue {
     private volatile long lastPullTimestamp = System.currentTimeMillis();
     /**上次消息消费时间戳*/
     private volatile long lastConsumeTimestamp = System.currentTimeMillis();
+    /** 顺序消费相关 broker端分布式锁的状态*/
     private volatile boolean locked = false;
     private volatile long lastLockTimestamp = System.currentTimeMillis();
+    /**
+     * 顺序消费相关
+     * msgTreeMap是否有消息可以供消费
+     *      放置消息时 如果放完消息msgTreeMap不为空，就将consuming设置为true
+     *      顺序消费 线程到msgTreeMap取消息时，如果没有消息，就将consuming设置为false
+     */
     private volatile boolean consuming = false;
     private volatile long msgAccCnt = 0;
 
@@ -147,7 +159,7 @@ public class ProcessQueue {
     /**
      * PullMessageService拉取消息后使用该方法将消息添加到ProcessQueue
      * @param msgs
-     * @return
+     * @return 返回当前ProcessQueue是否有消息消费
      */
     public boolean putMessage(final List<MessageExt> msgs) {
         boolean dispatchToConsume = false;
@@ -166,6 +178,7 @@ public class ProcessQueue {
                 msgCount.addAndGet(validMsgCnt);
 
                 if (!msgTreeMap.isEmpty() && !this.consuming) {
+                    //msgTreeMap有消息 并且 consuming状态为false
                     dispatchToConsume = true;
                     this.consuming = true;
                 }
@@ -302,18 +315,21 @@ public class ProcessQueue {
     }
 
     /**
-     * 清除consumingMsgOrderlyTreeMap中的消息
+     * 清除consumingMsgOrderlyTreeMap中的消息，并且返回最后一条消息的消费进度
      * @return
      */
     public long commit() {
         try {
             this.treeMapLock.writeLock().lockInterruptibly();
             try {
+                //返回最后一条消息的消费进度
                 Long offset = this.consumingMsgOrderlyTreeMap.lastKey();
+                //修改ProcessQueue中的消息数量和大小
                 msgCount.addAndGet(0 - this.consumingMsgOrderlyTreeMap.size());
                 for (MessageExt msg : this.consumingMsgOrderlyTreeMap.values()) {
                     msgSize.addAndGet(0 - msg.getBody().length);
                 }
+                //清除consumingMsgOrderlyTreeMap
                 this.consumingMsgOrderlyTreeMap.clear();
                 if (offset != null) {
                     return offset + 1;
@@ -349,7 +365,7 @@ public class ProcessQueue {
     }
 
     /**
-     * 从processQueue取出batchSize条消息
+     * 顺序消费使用 从processQueue取出batchSize条消息
      * @param batchSize
      * @return
      */
