@@ -232,7 +232,7 @@ public class DefaultMessageStore implements MessageStore {
         if (lock == null || lock.isShared() || !lock.isValid()) {
             throw new RuntimeException("Lock failed,MQ already started");
         }
-
+        //启动时创建lockFile
         lockFile.getChannel().write(ByteBuffer.wrap("lock".getBytes()));
         lockFile.getChannel().force(true);
         {
@@ -242,6 +242,7 @@ public class DefaultMessageStore implements MessageStore {
              * 3. Calculate the reput offset according to the consume queue;
              * 4. Make sure the fall-behind messages to be dispatched before starting the commitlog, especially when the broker role are automatically changed.
              */
+            //获取commitlog的最小物理偏移量
             long maxPhysicalPosInLogicQueue = commitLog.getMinOffset();
             for (ConcurrentMap<Integer, ConsumeQueue> maps : this.consumeQueueTable.values()) {
                 for (ConsumeQueue logic : maps.values()) {
@@ -1603,6 +1604,7 @@ public class DefaultMessageStore implements MessageStore {
             this.commitLog.recoverAbnormally(maxPhyOffsetOfConsumeQueue);
         }
 
+        //恢复consumequeue
         this.recoverTopicQueueTable();
     }
 
@@ -2000,28 +2002,37 @@ public class DefaultMessageStore implements MessageStore {
             }
         }
 
+        /**
+         * 删除过期的consumequeue文件
+         */
         private void deleteExpiredFiles() {
             int deleteLogicsFilesInterval = DefaultMessageStore.this.getMessageStoreConfig().getDeleteConsumeQueueFilesInterval();
-
+            //commitlog的最小偏移量
             long minOffset = DefaultMessageStore.this.commitLog.getMinOffset();
+            //如果commitlog的最小偏移量比consumequeue中消息的最小偏移量大 说明consumequeue有数据需要删除
             if (minOffset > this.lastPhysicalMinOffset) {
+                //consumequeue中所有小于commitlog的最小偏移量的数据全部要删除，设置lastPhysicalMinOffset为commitlog的最小偏移量
                 this.lastPhysicalMinOffset = minOffset;
 
+                //获取所有主题和队列的ConsumeQueue
                 ConcurrentMap<String, ConcurrentMap<Integer, ConsumeQueue>> tables = DefaultMessageStore.this.consumeQueueTable;
 
+                //按主题遍历
                 for (ConcurrentMap<Integer, ConsumeQueue> maps : tables.values()) {
                     for (ConsumeQueue logic : maps.values()) {
+                        //
                         int deleteCount = logic.deleteExpiredFile(minOffset);
 
                         if (deleteCount > 0 && deleteLogicsFilesInterval > 0) {
                             try {
+                                //移除cosumequeue文件后休眠100ms
                                 Thread.sleep(deleteLogicsFilesInterval);
                             } catch (InterruptedException ignored) {
                             }
                         }
                     }
                 }
-
+                //删除索引文件
                 DefaultMessageStore.this.indexService.deleteExpiredFile(minOffset);
             }
         }
