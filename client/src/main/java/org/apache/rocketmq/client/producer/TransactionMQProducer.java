@@ -16,11 +16,12 @@
  */
 package org.apache.rocketmq.client.producer;
 
-import java.util.concurrent.ExecutorService;
 import org.apache.rocketmq.client.exception.MQClientException;
 import org.apache.rocketmq.common.message.Message;
 import org.apache.rocketmq.common.protocol.NamespaceUtil;
 import org.apache.rocketmq.remoting.RPCHook;
+
+import java.util.concurrent.ExecutorService;
 
 public class TransactionMQProducer extends DefaultMQProducer {
     private TransactionCheckListener transactionCheckListener;
@@ -28,8 +29,9 @@ public class TransactionMQProducer extends DefaultMQProducer {
     private int checkThreadPoolMaxSize = 1;
     private int checkRequestHoldMax = 2000;
 
+    /**事务状态回查异步执行线程池*/
     private ExecutorService executorService;
-
+    /**事务监听器 执行本地事务，本地事务状态回查*/
     private TransactionListener transactionListener;
 
     public TransactionMQProducer() {
@@ -83,9 +85,17 @@ public class TransactionMQProducer extends DefaultMQProducer {
         return this.defaultMQProducerImpl.sendMessageInTransaction(msg, tranExecuter, arg);
     }
 
+    /**
+     * 事务消息发送接口
+     * @param msg Transactional message to send.
+     * @param arg Argument used along with local transaction executor.
+     * @return
+     * @throws MQClientException
+     */
     @Override
     public TransactionSendResult sendMessageInTransaction(final Message msg,
         final Object arg) throws MQClientException {
+        //如果事务监听器为null 直接抛异常
         if (null == this.transactionListener) {
             throw new MQClientException("TransactionListener is null", null);
         }
